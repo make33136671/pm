@@ -36,6 +36,53 @@ bash scripts/sync-github.sh
 
 ---
 
+## GitHub 推送凭据（**当前未配置，需要你提供一次**）
+
+现状：`github` 远程地址已配好，但**本机没有 GitHub 凭据**。表现是：
+
+```
+fatal: could not read Username for 'https://github.com'
+```
+
+（`push` 需要凭据；`pull` 匿名只对公开仓库有效。当前 `make33136671/pm` 匿名访问同样返回 404，
+说明它不存在或已改私有。）
+
+### 配一次就永久生效
+
+**方式 1：Token 写进 credential store（推荐，HTTPS）**
+
+```bash
+# 把 <TOKEN> 换成 GitHub Personal Access Token（需 repo 权限）
+git config --global credential.helper store
+echo "https://oauth2:<TOKEN>@github.com" >> ~/.git-credentials
+chmod 600 ~/.git-credentials
+
+# 验证
+cd /root/saibo/apps/pm && git remote -v | grep github
+git ls-remote github        # 成功则无输出或列出 refs；失败会提示认证问题
+```
+
+> 配好后 `scripts/sync-github.sh` 就能直接推送，无需再改代码。
+
+**方式 2：SSH（本机已有 `~/.ssh/id_ed25519`）**
+
+```bash
+# 把 ~/.ssh/id_ed25519.pub 加到 GitHub → Settings → SSH keys
+git remote set-url github git@github.com:make33136671/pm.git
+ssh -T git@github.com       # 第一次需确认 host key
+```
+
+### 定时同步
+
+`scripts/sync-github.sh` 是同步逻辑（拉 GitLab → 推 GitHub，网络错误重试 3 次，认证错误立即退出）。
+
+`scripts/setup-sync-cron.sh` 负责装定时任务，会**自动探测**本机有没有 cron：
+
+- 有 cron → 写入 crontab（每天 03:30）
+- 没有 cron（110 默认如此）→ 打印 systemd timer / n8n 两种现成配置，你选一条启用
+
+---
+
 ## 内容
 
 ### `SB.Feature.FileManager` —— 服务器文件管理器
