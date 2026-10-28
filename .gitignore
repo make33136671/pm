@@ -1,0 +1,33 @@
+# 依赖
+node_modules/
+.pnpm-store/
+
+# 构建产物
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# 日志与临时文件
+*.log
+logs/
+tmp/
+.tmp/
+
+# 环境变量与密钥（禁止入库）
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 测试与覆盖率
+coverage/
+.nyc_output/
