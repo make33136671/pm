@@ -155,6 +155,18 @@ export async function getRoots() {
   return api.get('/FileManager/Roots') as Promise<Breadcrumb[]>;
 }
 
+/** 默认打开路径（来自系统设置 FileManagerDefaultPath）。 */
+export interface DefaultPath {
+  path: string;
+  configured: string;
+  fallback: boolean;
+  message: string;
+}
+
+export async function getDefaultPath() {
+  return api.get('/FileManager/DefaultPath') as Promise<DefaultPath>;
+}
+
 export async function getDiskUsage(path: string) {
   return api.get('/FileManager/DiskUsage', {
     params: { path },

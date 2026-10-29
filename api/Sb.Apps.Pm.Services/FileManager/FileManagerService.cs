@@ -23,6 +23,13 @@ namespace Sb.Apps.Pm.Services.FileManager
     [AutoDependencyInjection]
     public class FileManagerService : IModuleInitializer
     {
+        /// <summary>系统设置 Key 常量。</summary>
+        public static class SettingKeys
+        {
+            /// <summary>文件管理器默认打开路径。</summary>
+            public const string DefaultPath = "FileManagerDefaultPath";
+        }
+
         #region IModuleInitializer
 
         public string ModuleName => "文件管理";
@@ -42,6 +49,26 @@ namespace Sb.Apps.Pm.Services.FileManager
             },
         };
 
+        /// <summary>
+        /// 系统设置里暴露给运维的项。
+        /// 注意：CategoryName 用「系统」与 PM 其它系统级配置同组，便于查找。
+        /// </summary>
+        public List<SystemSettingDefinition> GetSystemSettings() =>
+        [
+            new SystemSettingDefinition
+            {
+                Key = SettingKeys.DefaultPath,
+                Name = "文件管理默认打开路径（留空=根目录）",
+                CategoryName = "系统",
+                CategoryIcon = "lucide:settings",
+                CategorySort = 5,
+                DisplayType = SystemSettingDisplayType.Input,
+                DefaultValue = "/",
+                CantDelete = true,
+                Sort = 20,
+            },
+        ];
+
         #endregion
 
         private readonly PathGuard _guard;
@@ -50,6 +77,7 @@ namespace Sb.Apps.Pm.Services.FileManager
         private readonly IHostEnvironment _env;
         private readonly RecycleBinService _recycle;
         private readonly IFreeSql _fsql;
+        private readonly SystemSettingService _settings;
 
         /// <summary>新建文件的默认权限 0644（C# 无八进制字面量，故写十进制并注明）。</summary>
         private const int DefaultFileMode = 420;      // 0644 = 420
@@ -89,6 +117,7 @@ namespace Sb.Apps.Pm.Services.FileManager
             IHostEnvironment env,
             RecycleBinService recycle,
             IFreeSql fsql,
+            SystemSettingService settings,
             ILogger<FileManagerService> logger)
         {
             _guard = guard;
@@ -96,10 +125,65 @@ namespace Sb.Apps.Pm.Services.FileManager
             _env = env;
             _recycle = recycle;
             _fsql = fsql;
+            _settings = settings;
             _logger = logger;
         }
 
         #region 列目录
+
+        /// <summary>
+        /// 文件管理器默认打开路径（系统设置 FileManagerDefaultPath）。
+        ///
+        /// 取值优先级：
+        ///   1. 系统设置里的值（运维可在后台改）
+        ///   2. PathGuard 的默认根（白名单第一个根 / $HOME / /）
+        ///
+        /// 返回前做可访问性校验：目录不存在或越界时回退到默认根，
+        /// 避免配错路径导致前端一打开就报错。
+        /// </summary>
+        public DefaultPathDto GetDefaultPath()
+        {
+            var configured = string.Empty;
+            try
+            {
+                configured = _settings.GetSystemSettingByKey<string>(SettingKeys.DefaultPath) ?? string.Empty;
+            }
+            catch (Exception ex)
+            {
+                // 系统设置表尚未初始化（首次部署）时不应影响文件管理器可用
+                _logger.LogDebug(ex, "读取文件管理器默认路径设置失败，使用默认值");
+            }
+
+            var fallback = _guard.ToDisplayPath(_guard.DefaultRoot);
+            var raw = string.IsNullOrWhiteSpace(configured) ? fallback : configured.Trim();
+
+            try
+            {
+                // 用 Resolve 做完整校验（白名单 + 黑名单 + 软链）
+                var full = _guard.Resolve(raw);
+                if (!Directory.Exists(full))
+                    throw new FileManagerException($"目录不存在: {raw}");
+
+                return new DefaultPathDto
+                {
+                    Path = _guard.ToDisplayPath(full),
+                    Configured = raw,
+                    Fallback = false,
+                    Message = string.Empty,
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "文件管理器默认路径 {Path} 不可用，回退到 {Fallback}", raw, fallback);
+                return new DefaultPathDto
+                {
+                    Path = fallback,
+                    Configured = raw,
+                    Fallback = true,
+                    Message = $"配置的路径不可用（{ex.Message}），已回退到 {fallback}",
+                };
+            }
+        }
 
         /// <summary>列举目录内容。</summary>
         public DirectoryListingDto List(string? path, bool showHidden = false)

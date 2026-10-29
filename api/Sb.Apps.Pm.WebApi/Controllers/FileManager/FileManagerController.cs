@@ -64,6 +64,17 @@ namespace Sb.Apps.Pm.WebApi.Controllers.FileManager
         public Result Roots() => Result.Success(_service.Roots());
 
         /// <summary>
+        /// 默认打开路径（来自系统设置 FileManagerDefaultPath）。
+        /// GET /admin/FileManager/DefaultPath
+        /// </summary>
+        [HttpGet]
+        public Result DefaultPath()
+        {
+            try { return Result.Success(_service.GetDefaultPath()); }
+            catch (Exception ex) { return Result.Fail($"读取默认路径失败: {ex.Message}"); }
+        }
+
+        /// <summary>
         /// 磁盘用量。GET /admin/FileManager/DiskUsage?path=/
         /// </summary>
         [HttpGet]

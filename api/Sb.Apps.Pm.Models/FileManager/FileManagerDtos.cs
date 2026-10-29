@@ -312,4 +312,20 @@ namespace Sb.Apps.Pm.Models.FileManager
         public int Uid { get; set; }
         public int Gid { get; set; }
     }
+
+    /// <summary>文件管理器的默认打开路径。</summary>
+    public sealed class DefaultPathDto
+    {
+        /// <summary>实际生效的路径（前端据此定位）。</summary>
+        public string Path { get; set; } = "/";
+
+        /// <summary>系统设置里配置的原始值。</summary>
+        public string Configured { get; set; } = string.Empty;
+
+        /// <summary>true = 配置的路径不可用，已回退到默认根。</summary>
+        public bool Fallback { get; set; }
+
+        /// <summary>回退原因（Fallback=true 时非空）。</summary>
+        public string Message { get; set; } = string.Empty;
+    }
 }

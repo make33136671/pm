@@ -42,6 +42,7 @@ import {
   favorites,
   getDiskUsage,
   getNote,
+  getDefaultPath,
   getRoots,
   listDirectories,
   listDirectory,
@@ -107,14 +108,26 @@ async function loadDisk() {
 async function loadRoots() {
   try {
     const roots = (await getRoots()) ?? [];
-    if (roots.length > 0 && roots[0]) {
-      currentPath.value = roots[0].path;
+    if (roots.length > 0) {
       treeData.value = roots.map((r) => ({
         title: r.name,
         key: r.path,
         isLeaf: false,
       }));
     }
+
+    // 优先用系统设置里的默认打开路径；取不到再退回第一个根
+    let initial = roots[0]?.path ?? '/';
+    try {
+      const def = await getDefaultPath();
+      if (def?.path) initial = def.path;
+      if (def?.fallback && def.message) {
+        message.warning(def.message);
+      }
+    } catch {
+      // 默认路径读取失败不阻断，用 roots[0]
+    }
+    currentPath.value = initial;
   } catch {
     rootsInit();
   }
