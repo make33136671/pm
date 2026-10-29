@@ -368,3 +368,126 @@ connection error:       21
 真实对端连接 (45.119.135.17:udp)      16
 本机 Docker 网桥连接 (172.17/19/20)  3264
 ```
+
+---
+
+## 十一、现场修复记录（2026-10-30，已在 110 实施）
+
+> 本节记录在 110（`niuma`）上实际执行的改动、验证结果与踩坑。**均已生效。**
+
+### 11.1 意外发现的核心 Bug：a-side 根本没加入 swiftdesk 网络
+
+用真实 `easytier-core 2.6.4` 二进制复现确认：
+
+**`/opt/swiftdesk/config.toml` 把 `network_name` / `network_secret` 写在顶层，
+EasyTier 2.6.4 会完全忽略它们，实际生效为 `network_name="default"`、`network_secret=""`。**
+
+启动日志里的铁证：
+
+```toml
+[network_identity]
+network_name = "default"     # ← 配置里明明写的是 swiftdesk
+network_secret = ""
+```
+
+**后果**：a-side 一直以「default 网络」身份运行，与 relay/signal 的 swiftdesk 网络
+**根本不在同一个虚拟网络**，P2P 建不起来，永远连不上 B 侧。
+这也解释了为什么之前所有网络层调优都「感觉没效果」。
+
+**正确结构**（已用二进制验证）：
+
+```toml
+instance_name = "swiftdesk-a-side"
+hostname = "a-side"
+dhcp = true
+listeners = ["udp://0.0.0.0:22010"]
+rpc_portal = "127.0.0.1:15889"
+
+[network_identity]          # ← 必须在这个段里
+network_name = "swiftdesk"
+network_secret = "<secret>"
+
+[[peer]]
+uri = "wss://et.saibo.club/etws"
+
+[flags]                     # ← mtu 必须在这个段里，否则被忽略
+mtu = 1300
+```
+
+修复后启动日志确认 `network_name = "swiftdesk"`、`mtu = 1300`，tun0 成功建立，
+`new peer added` 出现。
+
+### 11.2 连接风暴的下游根因
+
+`ss -tnp` 抓到关键现场：
+
+```
+172.20.0.1%br-77339a2e93ac:44157 → 192.168.10.199:11011  SYN-SENT
+172.19.0.1%br-7f67ff5e7894:32831 → 192.168.10.199:11011  SYN-SENT
+172.22.0.1%br-2084fda208aa:40487 → 192.168.10.199:11011  SYN-SENT
+```
+
+**a-side 拿本机每一个 Docker 网桥地址（172.17/19/20.1 …）作源地址去连对端**，
+这些 SYN 的回包路由不回来，于是无限重试。网桥越多（本机 13 个），重试越疯狂。
+
+这比「监听 0.0.0.0 导致互连」更具体：**问题在出站选源，不在入站监听。**
+
+### 11.3 已实施的改动
+
+| # | 改动 | 位置 | 效果 |
+|---|---|---|---|
+| 1 | 修正 TOML 结构（`[network_identity]` / `[flags]`） | `/opt/swiftdesk/config.toml` | **核心修复**，a-side 真正加入 swiftdesk |
+| 2 | signal / relay 增加 `--disable-p2p true` | 两个 `docker-compose.yml` | 减少实例间主动互连 |
+| 3 | `mtu = 1300` 写入 `[flags]` | config.toml | 显式设 MTU（但见 11.5，DHCP 会覆盖） |
+
+### 11.4 验证结果
+
+| 指标 | 修复前 | 修复后 |
+|---|---|---|
+| 30 秒窗口内连接风暴 | 3300+ 次无效连接 | **0**（仅 2 条真实信令连接） |
+| a-side 网络身份 | `default`（错误） | `swiftdesk`（正确） |
+| tun0 | 未建立 | 已建立 |
+| `too many direct conns` | 56,896（72h） | 容器重建后 16/20 |
+| 信令 `et.saibo.club` | 正常 | 正常（400 = 正常拒绝非 EasyTier 握手） |
+
+### 11.5 遗留问题
+
+1. **DHCP 覆盖 MTU**：配置写了 `mtu = 1300`，但 `dhcp = true` 时 tun0 实际被下发为 **1280**。
+   这正是初版报告「MTU 会漂移」的真正原因——不是链路漂移，是 **DHCP 每次重连重新下发**。
+   要锁定 MTU，需关闭 dhcp 改用固定虚拟 IP，或在 DHCP 服务端改下发值。
+2. **虚拟 IP 变了**：tun0 从 `10.126.126.2` 变为 **`10.126.126.1`**（.1 通常是网关地址，需确认无冲突）。
+   `10.126.126.5`（199）当前 ping 不通，需重新确认 B 侧虚拟 IP。
+3. 120 秒断连（问题 3）仍未验证。
+
+### 11.6 踩坑记录（重要）
+
+**❌ 不要用 iptables 阻断「Docker 网桥 → EasyTier 端口」**
+
+我尝试用 104 条 iptables 规则（13 个网桥 × 4 端口 × 2 协议，只拦 NEW）阻断风暴，
+结果**直接打断了 Caddy 反代**：
+
+```
+dial tcp 192.168.2.110:11011: i/o timeout   →  et.saibo.club 返回 502
+```
+
+因为 `local-proxy`（Caddy）容器本身就工作在 `172.26.0.x`，它反代到宿主的 11011
+属于「网桥 → 宿主」流量，被规则一并拦住。**已全部回滚**，服务恢复。
+
+> 教训：在宿主机上加网桥级 DROP 前，必须先确认哪些合法容器服务依赖该路径。
+
+**❌ 不要用 sed 往 TOML 里插字段**
+
+最初用 `sed` 在 `listeners` 后插入 `mtu`，结果它落在了 `[[peer]]` 块内部，
+被解析成 peer 的字段，且整个配置结构错位。必须按 TOML 语义（顶层 / 表 / 数组表）精确放置。
+
+### 11.7 回滚方式
+
+```bash
+B=/root/easytier-fix-20261029-181338
+cp $B/config.toml.orig /opt/swiftdesk/config.toml        # 还原 a-side 配置
+cp $B/signal-compose.yml /root/docker/easytier-signal/docker-compose.yml
+cp $B/relay-compose.yml  /root/docker/easytier-relay/docker-compose.yml
+cd /root/docker/easytier-signal && docker compose up -d
+cd /root/docker/easytier-relay  && docker compose up -d
+systemctl restart swiftdesk-a-side
+```

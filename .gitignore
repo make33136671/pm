@@ -12,7 +12,7 @@ dist/
 build/
 out/
 *.tsbuildinfo
-release/
+/release/
 
 # ── 日志与临时文件 ──
 *.log
