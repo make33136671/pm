@@ -1,26 +1,36 @@
-# PM 部署到 110 harness 容器
+# PM 部署到 110（harness 容器 + pm.saibo.club）
 
-> 部署日期：2026-10-29
-> 容器：`df49e06f5900`（DSH Harness，对外映射 3080）
-> 访问地址：容器内 `http://127.0.0.1:6200`
+> 部署完成：2026-10-29
+> 访问地址：**https://pm.saibo.club**
+> 登录：`admin` / `111111`
 
 ---
 
-## 一、端口规划
+## 一、最终架构
 
-容器内已有服务：
+```
+内网（在家）
+  浏览器 → DNS 问 192.168.2.110 → 192.168.2.110:443 → Caddy(local-proxy)
+          → reverse_proxy 192.168.2.110:6200 → docker -p → 容器 6200 → PM
 
-| 端口 | 服务 | 说明 |
-|---|---|---|
-| 3079 | `dsh web` | DSH Harness 本体 |
-| **3080** | **`/app/proxy/index.js`** | **harness 自己的反向代理，转发到 3079** |
-| **6200** | **PM** | 本次新增 |
+外网（在外）
+  浏览器 → Cloudflare 边缘 → cf-tunnel → proxy:443（同一台 Caddy）→ 同上
 
-> ⚠️ **3080 已被 harness 的代理占用**，PM 不能直接监听 3080。
-> 当前方案：PM 独立监听 6200，宿主机侧再把 6200 映射出来（或让 Caddy 反代）。
->
-> 若希望 `3080/pm/*` 访问 PM，需改 `/app/proxy/index.js` 做路径分流，
-> 这会影响 harness 本身，未在本次改动范围内。
+证书：Let's Encrypt 通配 *.saibo.club（DNS-01），自动续签
+```
+
+| 组件 | 位置 / 值 |
+|---|---|
+| 容器 | `dsh-harness`（重启策略 `unless-stopped`） |
+| 端口映射 | `-p 3080:3080`（harness）、`-p 6200:6200`（PM） |
+| Caddy 站点块 | `/root/docker/dns-proxy/Caddyfile` → `pm.saibo.club` |
+| 内网解析 | `/root/docker/dns-proxy/local.hosts` → `192.168.2.110 pm.saibo.club` |
+| PM 目录 | 容器内 `/opt/pm/api` |
+| 启动脚本 | 容器内 `/opt/pm/start.sh` |
+| 持久备份 | 容器内 `/root/pm-backup/`（挂在宿主 `/root/projects/pm-backup`） |
+
+> **3080 为什么不能给 PM**：3080 是 harness 自己的反向代理（`/app/proxy/index.js` → 3079 dsh web）。
+> PM 独占 6200，与 harness 互不影响。
 
 ---
 
@@ -30,187 +40,137 @@
 |---|---|
 | 类型 | PostgreSQL |
 | 地址 | `192.168.2.110:5432` |
-| 库名 | `sb_pm`（本次新建） |
+| 库名 | `sb_pm` |
 | 用户 | `postgres` / `111111` |
 | 缓存 | Redis `192.168.2.110:6379`（**无密码**） |
 
-> 原 `appsettings.json` 配的是 `192.168.10.62:5432` 与 `192.168.10.63:6379`，
-> **从本容器不可达**。110 上其它项目（SwiftDesk / dramafloow）都用
-> `192.168.2.110`，本次一并对齐。
+> 原始 `appsettings.json` 配的是 `192.168.10.62` / `192.168.10.63`，**从容器不可达**。
+> 已对齐 110 上其它项目（SwiftDesk / dramafloow）的惯例。
 
 ---
 
-## 三、目录结构
+## 三、自启动
 
-```
-/opt/pm/
-├── start.sh          # 启动脚本（带 PID 文件与就绪等待）
-├── pm.pid            # 当前进程 PID
-├── docs/             # 文档（本文件）
-└── api/              # 发布产物（dotnet publish 输出）
-    ├── appsettings.json   # 已改为 110 的库与 Redis
-    ├── run.log            # 标准输出
-    ├── logs/              # Serilog 结构化日志（ndjson）
-    └── files-recycle/     # 回收站存储目录
-```
+容器入口 `/root/dsh-harness/entrypoint-supervised.sh`（宿主机 `/root/projects/dsh-harness/`）已改造：
+
+- 原有：监管 `dsh web`，死了自动拉起
+- **新增**：启动时调用 `/opt/pm/start.sh` 拉起 PM
+- **新增**：监管循环里检测 PM 存活，死了 5 秒后自动拉起
+- 退出信号时一并停止 PM
+
+配合容器的 `--restart unless-stopped`，**宿主重启 / 容器重启都会自动带起 PM**。
+
+实测：`docker restart dsh-harness` 后 PM 自动恢复（pid 变化，`installed:true`）。
+
+备份：`entrypoint-supervised.sh.bak-20261029-090116`
 
 ---
 
-## 四、部署步骤（可复现）
+## 四、⚠️ 工具链在容器层，重建容器会丢
 
-### 1. 建库
+PM 运行需要的工具（.NET SDK、curl、wget、libicu）**装在容器可写层**，
+`docker rm` 重建容器后会全部丢失（`/opt` 也不在挂载卷里）。
+
+### 容器重建后的一键恢复
 
 ```bash
-# 无 psql 客户端时用 Npgsql 建库，或直接在 PG 上执行：
-#   CREATE DATABASE sb_pm ENCODING 'UTF8';
+docker exec -it dsh-harness sh
+sh /root/pm-backup/restore.sh
 ```
 
-### 2. 发布
+`restore.sh` 会依次：换 apt 源 → 装 curl/wget/libicu → 装 .NET 10 SDK →
+重新 publish → 恢复 `appsettings.json` / `installed.lock` → 启动 PM。
+
+### 持久化清单（`/root/pm-backup/`，已同步到宿主）
+
+| 文件 | 作用 |
+|---|---|
+| `appsettings.json` | 数据库/Redis 配置 |
+| `installed.lock` | 安装标记 |
+| `start.sh` | PM 启动脚本 |
+| `restore.sh` | 一键恢复脚本 |
+
+> **根治方案**（建议后续做）：把 PM 拆成独立容器，
+> 基于 `mcr.microsoft.com/dotnet/aspnet:10.0`（宿主已有此镜像），
+> 挂载 `/root/projects/saibo/apps/pm`，与 harness 完全解耦。
+> 这样 harness 重建不影响 PM，PM 重建也不影响 harness。
+
+---
+
+## 五、日常操作
 
 ```bash
+# 进入容器
+docker exec -it dsh-harness sh
+
+# 启动 / 重启 PM
+/opt/pm/start.sh 6200
+
+# 停止
+kill $(cat /opt/pm/pm.pid)
+
+# 看日志
+tail -f /opt/pm/api/run.log                              # 标准输出
+tail -f /opt/pm/api/logs/info-$(date +%Y%m%d).ndjson    # 结构化日志
+
+# 重新发布（改代码后）
+export DOTNET_ROOT=/usr/local/dotnet
 cd /root/saibo/apps/pm/api
-dotnet publish Sb.Apps.Pm.WebApi/Sb.Apps.Pm.WebApi.csproj \
-  -c Release -o /tmp/pm-publish -p:Version=x.y.z
-```
+dotnet publish Sb.Apps.Pm.WebApi/Sb.Apps.Pm.WebApi.csproj -c Release -o /opt/pm/api
 
-### 3. 部署
-
-```bash
-cp -a /tmp/pm-publish/* /opt/pm/api/
-```
-
-### 4. 改配置（**关键，见下方坑 1**）
-
-```bash
-cd /opt/pm/api
-node -e "
-const fs=require('fs');
-const j=JSON.parse(fs.readFileSync('appsettings.json','utf8'));
-j.DbConfig={DbType:'PostgreSql',Server:'192.168.2.110',Port:'5432',Database:'sb_pm',
-  User:'postgres',Password:'111111',AutoSyncStructure:true,
-  MonitorSqlCommandForLog:false,SlowQueryThresholdMs:200};
-j.CacheConfig={Enabled:true,Provider:'Redis',
-  Redis:{Connection:'192.168.2.110:6379',InstanceName:'sbpm:'}};
-fs.writeFileSync('appsettings.json', JSON.stringify(j,null,2));
-"
-```
-
-### 5. 首次安装（仅第一次）
-
-```bash
-sh /opt/pm/start.sh 6200
-
-curl -s -X POST "http://127.0.0.1:6200/admin/Setup/Install" \
-  -H "Content-Type: application/json" -d '{
-  "database":{"dbType":"PostgreSql","server":"192.168.2.110","port":"5432",
-              "database":"sb_pm","user":"postgres","password":"111111"},
-  "enableCache":true,"cacheProvider":"Redis",
-  "redis":{"connection":"192.168.2.110:6379","instanceName":"sbpm:"},
-  "productCn":"PM 项目管理平台","productEn":"pm",
-  "timeZone":"Asia/Shanghai","corsAllowAll":true,"corsOrigins":[],
-  "adminUsername":"admin","adminPassword":"111111","adminDisplayName":"超级管理员"
-}'
-```
-
-安装成功后会生成 `installed.lock`，并**覆盖 appsettings.json**（见坑 1），
-所以第 4 步的配置改完后要**再确认一次**。
-
-### 6. 重启
-
-```bash
-sh /opt/pm/start.sh 6200
+# 改 Caddy 后重载
+cd /root/docker/dns-proxy && docker compose up -d --force-recreate proxy
 ```
 
 ---
 
-## 五、启动与停止
-
-```bash
-sh /opt/pm/start.sh 6200      # 启动（自动停旧进程、等就绪）
-kill $(cat /opt/pm/pm.pid)    # 停止
-```
-
-`start.sh` 特点：
-
-- PID 文件 `/opt/pm/pm.pid`，避免手杀误伤
-- 启动后轮询 `/admin/Setup/Status`，就绪才返回
-- 进程提前退出会打印 `run.log` 尾部
-
----
-
-## 六、验证清单（本次已全部实测通过）
+## 六、验收记录
 
 | 项 | 结果 |
 |---|---|
-| `GET /admin/Setup/Status` | `installed: true` |
-| 登录 `admin/111111` | 拿到 accessToken |
-| `GET /admin/FileManager/List?path=/opt` | 4 目录 / 1 文件 |
-| 新建目录 / 新建文件 / 写入 / 读取 | 全部成功 |
-| 删除 → 进回收站 → 列表 → 恢复 | 全链路成功，内容一致 |
-| 压缩 zip → 预览 → 解压 | 成功，内容一致 |
-| 搜索 `*.dll` | 命中 94，扫描 217，2ms |
-| 路径大小统计 | 48024926 字节 / 187 文件 / 30 目录 |
-| 批量操作 | 返回逐项结果 |
+| 内网 `https://pm.saibo.club` | **HTTP 200** |
+| 外网 `https://pm.saibo.club`（走 CF 隧道） | **HTTP 200** |
+| 内网 DNS 解析 | `192.168.2.110` |
+| 证书 | Let's Encrypt `*.saibo.club` |
+| 登录 `admin/111111` | 成功（token 215 字符） |
+| 文件管理器目录列表 | 正常 |
+| 回收站接口 | 正常（表已建） |
+| 磁盘用量 | 正常 |
+| 容器重启后自动恢复 | **已验证** |
 
 ---
 
-## 七、踩过的坑（重要）
+## 七、踩坑记录
 
-### 坑 1：安装向导会覆盖 appsettings.json
+### 坑 1：3080 被 harness 占用
 
-`Setup/Install` 成功后会把请求里的数据库参数写回 `appsettings.json`。
+`3080` 是 `/app/proxy/index.js`（harness 反向代理 → 3079），PM 不能监听。
+→ PM 用 6200，通过 `docker -p 6200:6200` 映射。
+
+### 坑 2：Caddy 在容器内，不能写容器 IP
+
+Caddy（local-proxy）在 `dnp` 网络，访问不到 harness 的 `172.17.0.4`。
+→ 必须做端口映射，Caddy 上游写宿主 `192.168.2.110:6200`。
+
+### 坑 3：安装向导覆盖 appsettings.json
+
+`Setup/Install` 成功后会按请求参数重写 `appsettings.json`。
 **先改配置再安装 = 被冲掉**。
+→ 安装请求里直接传正确的数据库参数，或安装后再改一次并重启。
 
-现象：服务能起来，`/admin/Setup/Status` 正常，但**登录 5 秒超时、返回 500**，
-日志里全是：
+### 坑 4：重新发布清空 /opt/pm/api
 
-```
-Failed to connect to 192.168.10.62:5432
-RedisConnectionException: It was not possible to connect to the redis server(s)
-```
+`dotnet publish -o /opt/pm/api` 会清空目录，`installed.lock` 随之丢失，
+服务变成 `installed:false`。
+→ 发布后恢复 `installed.lock`，或重新走安装。
 
-正确顺序：**安装 → 检查/修正 appsettings.json → 重启**。
+### 坑 5：重建容器丢失工具链（本次踩到）
 
-### 坑 2：回收站表没建 —— GetEntityTypes 返回空
+`docker inspect` 查到的镜像名 `smanx/deepseek-harness` 与旧容器实际环境不符
+（旧容器装过 dotnet 等工具）。照着镜像名重建后，工具全部丢失。
+→ 重建前应比对镜像 ID 与容器内实际工具；已用 `restore.sh` 兜底。
 
-`FileManagerService` 实现 `IModuleInitializer` 时 `GetEntityTypes() => []`，
-导致 `sb_pm_file_recycle` / `sb_pm_file_note` 两张表从未创建。
+### 坑 6：容器内无 ssh/curl 时如何操作宿主
 
-现象：`RecycleList` 报 `42P01: relation "sb_pm_file_recycle" does not exist`。
-
-修复：改为返回实体类型数组。
-
-### 坑 3：FreeSql `ExecuteAffrows()` 不回填自增主键
-
-`_fsql.Insert(item).ExecuteAffrows()` 之后 `item.Id` 仍是 0，存储名变成 `0_xxx`，
-列表返回的 `id` 为空字符串，恢复时按空 `StorageName` 查不到行。
-
-现象：删除能成功、列表能看到条目，但**恢复报「回收站条目不存在」**。
-
-修复：改用 `ExecuteIdentity()` 拿回主键。另对历史脏数据（`StorageName == ''`）
-在列表查询时过滤掉。
-
-### 坑 4：端口占用
-
-`pkill -f "Sb.Apps.Pm.WebApi.dll"` 在容器里不可靠（可能残留多个实例），
-且命令行匹配会误伤自己的 shell。
-
-现象：`Failed to bind to address http://0.0.0.0:6200: address already in use`。
-
-修复：用 PID 文件管理（见 `start.sh`），或按 PID 精确 kill。
-
-### 坑 5：harness 的 supervisor 只管 dsh
-
-容器入口 `/root/dsh-harness/entrypoint-supervised.sh` 只监管 `dsh web` 与
-`/app/proxy`，**不会拉起 PM**。容器重启后 PM 需要手动 `start.sh`。
-
-（本次按需求选择「先不常驻」；要常驻需另加 watchdog 或改进程入口。）
-
----
-
-## 八、待办
-
-- [ ] 宿主机侧映射 6200 端口，或 Caddy 加 `pm.saibo.club` 站点块
-- [ ] 按需做常驻（watchdog / supervisor / 入口脚本）
-- [ ] Chat 模块迁移（见 `api/docs/Chat-Module-Disabled.md`）
-- [ ] 前端 `sb-framework-admin` 构建并部署到 `/opt/pm/admin`
+新容器里没有任何 HTTP/SSH 客户端。解决办法：`npm install ssh2`，
+用 Node 写个最小 SSH 客户端（`/root/.sshcli/h.js`）操作宿主机。
