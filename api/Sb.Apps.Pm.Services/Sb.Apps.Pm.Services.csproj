@@ -18,7 +18,7 @@
     <InternalsVisibleTo Include="Sb.Apps.Pm.Services.Tests" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="SB.Framework.Services" Version="0.5.2" />
+    <PackageReference Include="SB.Framework.Services" Version="0.5.3" />
     <!-- IWebHostEnvironment 等 ASP.NET 抽象：旧版经 SB.Framework.Services 传递，
          0.5.2 起不再传递，显式声明（与 SB.Feature.* 插件的做法一致） -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

@@ -35,9 +35,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="SB.Framework.WebApi" Version="0.5.5" />
+    <PackageReference Include="SB.Framework.WebApi" Version="0.5.6" />
     <PackageReference Include="SB.Framework.Core" Version="0.5.0" />
-    <PackageReference Include="SB.Framework.Analyzers" Version="0.5.0">
+    <PackageReference Include="SB.Framework.Analyzers" Version="0.5.1">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
     </PackageReference>
