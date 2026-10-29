@@ -43,11 +43,20 @@ public static class WebTerminalEndpoint
     /// </summary>
     private const string ClientLogPath = "/webterm/clientlog";
 
+    /// <summary>诊断日志读取端点（GET，便于浏览器/PS 直接拉）。</summary>
+    private const string DiagPath = "/webterm/diag";
+
     public static IApplicationBuilder UseWebTerminalEndpoint(this IApplicationBuilder app)
     {
         app.Use(async (ctx, next) =>
         {
             var path = ctx.Request.Path.Value;
+
+            if (path != null && path.StartsWith(DiagPath, StringComparison.Ordinal))
+            {
+                await HandleDiagReadAsync(ctx);
+                return;
+            }
 
             if (path != null && path.StartsWith(ClientLogPath, StringComparison.Ordinal))
             {
@@ -88,11 +97,7 @@ public static class WebTerminalEndpoint
     {
         try
         {
-            // AppContext.BaseDirectory 在某些启动方式下可能不等于 ContentRoot，
-            // 这里优先用环境变量 ASPNETCORE_CONTENTROOT，再退回 BaseDirectory
-            var root = Environment.GetEnvironmentVariable("ASPNETCORE_CONTENTROOT")
-                       ?? AppContext.BaseDirectory;
-            var dir = Path.Combine(root, "logs");
+            var dir = DiagLogDir();
             Directory.CreateDirectory(dir);
             var path = Path.Combine(dir, $"webterm-diag-{SB.Framework.Core.Util.AppTime.UtcNow:yyyyMMdd}.log");
             var text = $"{SB.Framework.Core.Util.AppTime.UtcNow:yyyy-MM-ddTHH:mm:ss.fffZ} {line}{Environment.NewLine}";
@@ -110,6 +115,118 @@ public static class WebTerminalEndpoint
             return "ERR:" + ex.Message;
         }
     }
+    /// <summary>
+    /// 诊断日志目录（与 WriteDiagLog 保持一致）。
+    /// </summary>
+    private static string DiagLogDir()
+    {
+        var root = Environment.GetEnvironmentVariable("ASPNETCORE_CONTENTROOT")
+                   ?? AppContext.BaseDirectory;
+        return Path.Combine(root, "logs");
+    }
+
+    /// <summary>
+    /// 读取诊断日志（GET /webterm/diag[?lines=200]）。
+    ///
+    /// 用途：线上排查时不用 SSH 到服务器，浏览器/PowerShell 直接拉日志文本。
+    /// 鉴权：与 clientlog 一致，token 从 query 或 Authorization 头取；
+    ///       鉴权失败**不拒绝**（诊断优先），仅记录为 anonymous。
+    ///
+    /// 只返回 logs/webterm-diag-*.log，不允许指定任意路径（防目录穿越）。
+    /// </summary>
+    private static async Task HandleDiagReadAsync(HttpContext ctx)
+    {
+        var logger = ctx.RequestServices.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("Sb.Apps.Pm.WebApi.WebTerminals");
+
+        // 鉴权（失败也放行，只为日志里标 anonymous）
+        string token = ctx.Request.Query["token"].ToString();
+        if (string.IsNullOrEmpty(token) && !string.IsNullOrEmpty(ctx.Request.Headers.Authorization))
+            token = ctx.Request.Headers.Authorization.ToString().Replace("Bearer ", "", StringComparison.OrdinalIgnoreCase).Trim();
+
+        string username = "anonymous";
+        if (!string.IsNullOrEmpty(token))
+        {
+            ctx.Request.Headers.Authorization = "Bearer " + token;
+            var auth = await ctx.AuthenticateAsync("JwtAdmin");
+            if (auth.Succeeded && auth.Principal != null)
+            {
+                var u = auth.Principal.Username();
+                if (!string.IsNullOrEmpty(u)) username = u;
+            }
+        }
+
+        // 行数限制（默认 500，最多 5000）
+        var linesParam = ctx.Request.Query["lines"].ToString();
+        var lines = int.TryParse(linesParam, out var l) ? Math.Clamp(l, 1, 5000) : 500;
+
+        // 文件名参数（默认今天的 UTC 日期）
+        var fileParam = ctx.Request.Query["file"].ToString();
+        string fileName;
+        if (string.IsNullOrWhiteSpace(fileParam))
+        {
+            fileName = $"webterm-diag-{SB.Framework.Core.Util.AppTime.UtcNow:yyyyMMdd}.log";
+        }
+        else
+        {
+            // 防目录穿越：只允许 webterm-diag-*.log 形状
+            var bare = Path.GetFileName(fileParam);
+            if (!bare.StartsWith("webterm-diag-", StringComparison.Ordinal)
+                || !bare.EndsWith(".log", StringComparison.OrdinalIgnoreCase))
+            {
+                ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await ctx.Response.WriteAsync("file 只允许 webterm-diag-YYYYMMDD.log");
+                return;
+            }
+            fileName = bare;
+        }
+
+        var dir = DiagLogDir();
+        var path = Path.Combine(dir, fileName);
+
+        // 列出现有诊断日志，方便定位
+        string[] existing;
+        try { existing = Directory.Exists(dir) ? Directory.GetFiles(dir, "webterm-diag-*.log") : []; }
+        catch { existing = []; }
+
+        ctx.Response.StatusCode = StatusCodes.Status200OK;
+        ctx.Response.ContentType = "text/plain; charset=utf-8";
+
+        if (!File.Exists(path))
+        {
+            var names = existing.Length == 0 ? "(目录内无诊断日志)"
+                : string.Join(", ", existing.Select(f => Path.GetFileName(f)));
+            await ctx.Response.WriteAsync(
+                $"未找到 {fileName}\n目录: {dir}\n现有文件: {names}\n");
+            return;
+        }
+
+        try
+        {
+            // FileShare.ReadWrite：日志正在写也能读
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(fs, System.Text.Encoding.UTF8);
+            var all = new List<string>();
+            string? line;
+            while ((line = reader.ReadLine()) != null) all.Add(line);
+
+            var take = all.Count > lines ? all.Skip(all.Count - lines).ToList() : all;
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("# webterm 诊断日志");
+            sb.AppendLine($"# 文件: {fileName}");
+            sb.AppendLine($"# 大小: {new FileInfo(path).Length} 字节, 总行数 {all.Count}, 返回最后 {take.Count} 行");
+            sb.AppendLine($"# 查询人: {username}");
+            sb.AppendLine("# ====");
+            foreach (var t in take) sb.AppendLine(t);
+            await ctx.Response.WriteAsync(sb.ToString());
+        }
+        catch (Exception ex)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status500InternalServerError;
+            await ctx.Response.WriteAsync("读取失败: " + ex.Message);
+        }
+    }
+
     private static async Task HandleClientLogAsync(HttpContext ctx)
     {
         // ⚠️ 必须用专用 category：ILogger<object> 的 category 是 System.Object，
