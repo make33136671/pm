@@ -16,7 +16,7 @@
     <InternalsVisibleTo Include="Sb.Apps.Pm.Services.Tests" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="SB.Framework.Services.NoLicense" Version="0.4.13" />
+    <PackageReference Include="SB.Framework.Services" Version="0.5.2" />
     <PackageReference Include="SB.Chat" Version="0.1.0-preview.1" />
     <PackageReference Include="SB.Chat.Telegram" Version="0.1.0-preview.1" />
     <ProjectReference Include="..\Sb.Apps.Pm.Models\Sb.Apps.Pm.Models.csproj" />

@@ -7,6 +7,6 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="SB.Framework.Models.NoLicense" Version="0.4.7" />
+    <PackageReference Include="SB.Framework.Models" Version="0.5.1" />
   </ItemGroup>
 </Project>
