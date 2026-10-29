@@ -23,6 +23,8 @@ PM 的网页终端是**本地 root PTY**（`NativePty` → `posix_spawn` → `/b
 
 ## 二、能力清单
 
+### 浏览与读写
+
 | 能力 | 接口 | 说明 |
 |---|---|---|
 | 列目录 | `GET /admin/FileManager/List?path=` | 目录优先排序，含大小/权限/属主/mtime；超限截断并提示 |
@@ -34,11 +36,57 @@ PM 的网页终端是**本地 root PTY**（`NativePty` → `posix_spawn` → `/b
 | 保存 | `POST /admin/FileManager/Save` | 原子写（临时文件 + rename）、可选 `.bak`、`expectedHash` 并发保护 |
 | 新建 | `POST /admin/FileManager/Create` | 文件或目录，权限归一 644 / 755 |
 | 重命名 | `POST /admin/FileManager/Rename` | 同目录改名 |
-| 删除 | `POST /admin/FileManager/Delete` | 目录需 `recursive=true` |
-| chmod | `POST /admin/FileManager/Chmod` | 八进制权限位 |
 | 上传 | `POST /admin/FileManager/Upload` | 单文件上限 `MaxUploadSizeMB` |
 
+### 回收站（对标宝塔/1Panel）
+
+| 能力 | 接口 | 说明 |
+|---|---|---|
+| 删除 | `POST /admin/FileManager/Delete` | **默认移入回收站**，可恢复；关闭回收站则永久删除 |
+| 列表 | `GET /admin/FileManager/RecycleList` | 含原始路径、大小、删除人、删除时间 |
+| 恢复 | `POST /admin/FileManager/RecycleRestore` | 原位置被占用时自动加 `_restored_<时间戳>` 后缀，不覆盖 |
+| 彻底删除 | `POST /admin/FileManager/RecyclePurge` | 单条永久删除 |
+| 清空 | `POST /admin/FileManager/RecyclePurgeAll` | 全部永久删除 |
+| 自动清理 | — | 超配额（`RecycleBinQuotaMB`）从最旧清；超期（`RecycleBinRetentionDays`）清 |
+
+### 压缩 / 解压
+
+| 能力 | 接口 | 说明 |
+|---|---|---|
+| 压缩 | `POST /admin/FileManager/Compress` | 多选打包；zip / tar / tar.gz / tgz / gz / tar.bz2 / tar.xz / 7z |
+| 预览 | `GET /admin/FileManager/ArchivePreview?path=` | 列条目、总大小，不解压 |
+| 解压 | `POST /admin/FileManager/Extract` | 支持密码包 / GBK 文件名还原 / 覆盖开关 |
+| 格式列表 | `GET /admin/FileManager/ArchiveFormats` | 前端下拉用 |
+
+格式分工：
+- **内置零依赖**：zip（`ZipArchive`）、tar / tar.gz / tgz（`TarReader/Writer` + `GZipStream`）、gz
+- **系统命令**（缺了就明确报「未安装 xxx」）：tar.bz2 / tar.xz（tar）、bz2（bzip2）、xz（xz）、7z（7z）、rar（unrar / 7z）
+
+### 复制 / 移动 / 批量
+
+| 能力 | 接口 | 说明 |
+|---|---|---|
+| 复制 | `POST /admin/FileManager/Copy` | 同盘原子 move；跨盘自动退化为「复制 + 删源」 |
+| 移动 | `POST /admin/FileManager/Move` | 同上；禁止移到自身内部 |
+| 批量删除 | `POST /admin/FileManager/BatchDelete` | `paths` 换行分隔，逐项返回结果 |
+| 批量复制移动 | `POST /admin/FileManager/BatchCopyMove` | 同上 |
+| 批量 chmod | `POST /admin/FileManager/BatchChmod` | 同上 |
+
+### 搜索 / 统计 / 属主 / 备注
+
+| 能力 | 接口 | 说明 |
+|---|---|---|
+| 搜索 | `GET /admin/FileManager/Search` | 文件名支持 `* ?` 通配；可选内容匹配；有扫描上限 |
+| 路径大小 | `GET /admin/FileManager/PathSize?path=` | 递归统计大小 / 文件数 / 目录数 |
+| chown | `POST /admin/FileManager/Chown` | 改属主/属组，可递归；需 `AllowChown` |
+| 用户列表 | `GET /admin/FileManager/SystemUsers` | 读 `/etc/passwd`，前端下拉 |
+| 读备注 | `GET /admin/FileManager/GetNote?path=` | 备注 + 收藏状态（落表 `sb_pm_file_note`） |
+| 存备注 | `POST /admin/FileManager/SaveNote` | 备注与收藏都清空时自动删记录 |
+| 收藏列表 | `GET /admin/FileManager/Favorites` | 侧边栏快捷入口 |
+
 前端页面：`admin/apps/web-antd/src/views/file-manager/`（`index.vue` + `api.ts`）。
+
+界面包含：目录树 + 收藏夹、多选批量、**右键菜单**、搜索栏、回收站抽屉、压缩/解压弹窗、属性/备注弹窗、编辑器。
 
 ---
 

@@ -49,5 +49,53 @@ namespace Sb.Apps.Pm.Services.FileManager
 
         /// <summary>新建文件 / 目录是否归一为 644 / 755，避免 umask 产生不可读文件。</summary>
         public bool NormalizePermissions { get; set; } = true;
+
+        // ════════════════ 回收站 ════════════════
+
+        /// <summary>
+        /// 是否启用回收站。开启后删除 = 移到回收站目录，可恢复。
+        /// 关掉则删除立即不可逆——默认开启，防误删。
+        /// </summary>
+        public bool RecycleBinEnabled { get; set; } = true;
+
+        /// <summary>
+        /// 回收站存放目录（相对 ContentRootPath，或绝对路径）。
+        /// 必须与业务数据在同一块盘上，否则 move 会退化为跨盘复制（大文件很慢）。
+        /// </summary>
+        public string RecycleBinPath { get; set; } = "files-recycle";
+
+        /// <summary>回收站总容量上限（MB），0 = 不限。超限时清理最旧的条目。</summary>
+        public int RecycleBinQuotaMB { get; set; } = 2048;
+
+        /// <summary>回收站保留天数，0 = 不自动清理。</summary>
+        public int RecycleBinRetentionDays { get; set; } = 30;
+
+        // ════════════════ 压缩 / 解压 ════════════════
+
+        /// <summary>单个压缩包解压后的体积上限（MB），防 zip 炸弹。0 = 不限制。</summary>
+        public int MaxExtractSizeMB { get; set; } = 8192;
+
+        /// <summary>解压时允许的最大条目数，防条目炸弹。</summary>
+        public int MaxExtractEntries { get; set; } = 200_000;
+
+        /// <summary>压缩包预览最多返回条目数。</summary>
+        public int MaxArchivePreviewEntries { get; set; } = 2000;
+
+        /// <summary>外部命令超时（秒）。xz / 7z / unrar 走子进程，必须有超时。</summary>
+        public int ExternalCommandTimeoutSeconds { get; set; } = 1800;
+
+        // ════════════════ 搜索 / 批量 ════════════════
+
+        /// <summary>全局搜索默认最大结果数。</summary>
+        public int MaxSearchResults { get; set; } = 500;
+
+        /// <summary>全局搜索默认最多扫描条目数。</summary>
+        public int MaxSearchScan { get; set; } = 200_000;
+
+        /// <summary>批量操作单次最多处理条目数。</summary>
+        public int MaxBatchItems { get; set; } = 200;
+
+        /// <summary>是否允许 chown（改属主）。需要进程有 CAP_CHOWN（通常是 root）。</summary>
+        public bool AllowChown { get; set; } = true;
     }
 }

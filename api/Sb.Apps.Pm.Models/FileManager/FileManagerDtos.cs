@@ -131,4 +131,185 @@ namespace Sb.Apps.Pm.Models.FileManager
         public long UsedBytes { get; set; }
         public double UsedPercent { get; set; }
     }
+
+    /// <summary>回收站条目。</summary>
+    public sealed class RecycleBinItemDto
+    {
+        /// <summary>回收站内的唯一名（用于恢复 / 永久删除）。</summary>
+        public string Id { get; set; } = string.Empty;
+
+        /// <summary>原始完整路径（恢复目标）。</summary>
+        public string OriginalPath { get; set; } = string.Empty;
+
+        /// <summary>原始文件名。</summary>
+        public string Name { get; set; } = string.Empty;
+
+        /// <summary>删除时的大小（字节）。</summary>
+        public long Size { get; set; }
+
+        /// <summary>true = 目录。</summary>
+        public bool IsDirectory { get; set; }
+
+        /// <summary>删除时间（UTC）。</summary>
+        public string DeletedAt { get; set; } = string.Empty;
+
+        /// <summary>删除操作人。</summary>
+        public string DeletedBy { get; set; } = string.Empty;
+    }
+
+    /// <summary>回收站列表。</summary>
+    public sealed class RecycleBinListDto
+    {
+        public List<RecycleBinItemDto> Items { get; set; } = [];
+        public long TotalSize { get; set; }
+        public int Count { get; set; }
+        /// <summary>回收站总容量上限（MB），0 = 不限。</summary>
+        public int QuotaMb { get; set; }
+    }
+
+    /// <summary>压缩请求。</summary>
+    public sealed class CompressRequestDto
+    {
+        /// <summary>要压缩的源路径（可多个）。</summary>
+        public List<string> Paths { get; set; } = [];
+
+        /// <summary>输出目录（默认为第一个源文件的父目录）。</summary>
+        public string? OutputDir { get; set; }
+
+        /// <summary>输出文件名（不含扩展名）；不传则用第一个源文件名或 "archive"。</summary>
+        public string? Name { get; set; }
+
+        /// <summary>格式：zip / tar / tar.gz / tgz / gz / tar.bz2 / tar.xz / 7z。</summary>
+        public string Format { get; set; } = "zip";
+
+        /// <summary>压缩等级 0-9（仅 zip / 7z 生效，0 = 存储不压缩）。</summary>
+        public int Level { get; set; } = 6;
+
+        /// <summary>zip 时是否加密（7z 命令仅）；true 时必须给 Password。</summary>
+        public bool Encrypt { get; set; }
+
+        /// <summary>加密口令。</summary>
+        public string? Password { get; set; }
+    }
+
+    /// <summary>解压请求。</summary>
+    public sealed class ExtractRequestDto
+    {
+        /// <summary>压缩包路径。</summary>
+        public string Path { get; set; } = string.Empty;
+
+        /// <summary>解压目标目录；不传则解到压缩包所在目录的新建同名目录。</summary>
+        public string? OutputDir { get; set; }
+
+        /// <summary>有密码的压缩包需要提供。</summary>
+        public string? Password { get; set; }
+
+        /// <summary>是否覆盖同名文件。</summary>
+        public bool Overwrite { get; set; }
+
+        /// <summary>zip 内非 UTF-8 文件名（Windows 打的包）时用 GBK 解码。</summary>
+        public bool UseGbkNames { get; set; }
+    }
+
+    /// <summary>压缩包条目预览。</summary>
+    public sealed class ArchiveEntryDto
+    {
+        public string Name { get; set; } = string.Empty;
+        public long Size { get; set; }
+        public long CompressedSize { get; set; }
+        public bool IsDirectory { get; set; }
+        public string LastModified { get; set; } = string.Empty;
+        public bool Encrypted { get; set; }
+    }
+
+    /// <summary>压缩包预览结果。</summary>
+    public sealed class ArchivePreviewDto
+    {
+        public string Path { get; set; } = string.Empty;
+        public string Format { get; set; } = string.Empty;
+        public int TotalEntries { get; set; }
+        public long TotalSize { get; set; }
+        /// <summary>超过 MaxArchivePreviewEntries 时只返回前 N 条。</summary>
+        public bool Truncated { get; set; }
+        public List<ArchiveEntryDto> Entries { get; set; } = [];
+    }
+
+    /// <summary>批量操作单项结果。</summary>
+    public sealed class BatchItemResultDto
+    {
+        public string Path { get; set; } = string.Empty;
+        public bool Success { get; set; }
+        public string Message { get; set; } = string.Empty;
+    }
+
+    /// <summary>批量操作汇总。</summary>
+    public sealed class BatchResultDto
+    {
+        public int Total { get; set; }
+        public int Succeeded { get; set; }
+        public int Failed { get; set; }
+        public List<BatchItemResultDto> Items { get; set; } = [];
+    }
+
+    /// <summary>路径大小统计结果。</summary>
+    public sealed class PathSizeDto
+    {
+        public string Path { get; set; } = string.Empty;
+        public long Size { get; set; }
+        public long FileCount { get; set; }
+        public long DirCount { get; set; }
+        /// <summary>是否因条目太多而提前中止（此时 Size 是下限）。</summary>
+        public bool Truncated { get; set; }
+    }
+
+    /// <summary>全局搜索请求。</summary>
+    public sealed class SearchRequestDto
+    {
+        /// <summary>搜索起点目录。</summary>
+        public string Path { get; set; } = "/";
+
+        /// <summary>文件名关键词（子串匹配，不区分大小写）；支持通配符 * 和 ?。</summary>
+        public string Pattern { get; set; } = "*";
+
+        /// <summary>是否递归子目录。</summary>
+        public bool Recursive { get; set; } = true;
+
+        /// <summary>内容关键词（可选，会读取文本文件匹配）。</summary>
+        public string? ContentContains { get; set; }
+
+        /// <summary>最大结果数，防止全盘搜索撑爆内存。</summary>
+        public int MaxResults { get; set; } = 500;
+
+        /// <summary>扫描条目上限（含目录），超出即停。</summary>
+        public int MaxScan { get; set; } = 200_000;
+    }
+
+    /// <summary>搜索响应。</summary>
+    public sealed class SearchResultDto
+    {
+        public List<FileEntryDto> Items { get; set; } = [];
+        /// <summary>是否因上限提前终止。</summary>
+        public bool Truncated { get; set; }
+        /// <summary>实际扫描的条目数。</summary>
+        public long Scanned { get; set; }
+        /// <summary>耗时（毫秒）。</summary>
+        public long ElapsedMs { get; set; }
+    }
+
+    /// <summary>文件备注（存在数据库，按路径索引）。</summary>
+    public sealed class FileNoteDto
+    {
+        public string Path { get; set; } = string.Empty;
+        public string Note { get; set; } = string.Empty;
+        public bool Favorite { get; set; }
+        public string UpdatedTime { get; set; } = string.Empty;
+    }
+
+    /// <summary>系统用户（chown 用）。</summary>
+    public sealed class SystemUserDto
+    {
+        public string Name { get; set; } = string.Empty;
+        public int Uid { get; set; }
+        public int Gid { get; set; }
+    }
 }

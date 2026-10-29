@@ -1,4 +1,5 @@
 using System.Globalization;
+using FreeSql;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -47,6 +48,8 @@ namespace Sb.Apps.Pm.Services.FileManager
         private readonly FileManagerOptions _options;
         private readonly ILogger<FileManagerService> _logger;
         private readonly IHostEnvironment _env;
+        private readonly RecycleBinService _recycle;
+        private readonly IFreeSql _fsql;
 
         /// <summary>新建文件的默认权限 0644（C# 无八进制字面量，故写十进制并注明）。</summary>
         private const int DefaultFileMode = 420;      // 0644 = 420
@@ -84,11 +87,15 @@ namespace Sb.Apps.Pm.Services.FileManager
             PathGuard guard,
             FileManagerOptions options,
             IHostEnvironment env,
+            RecycleBinService recycle,
+            IFreeSql fsql,
             ILogger<FileManagerService> logger)
         {
             _guard = guard;
             _options = options;
             _env = env;
+            _recycle = recycle;
+            _fsql = fsql;
             _logger = logger;
         }
 
@@ -446,7 +453,12 @@ namespace Sb.Apps.Pm.Services.FileManager
             };
         }
 
-        /// <summary>删除文件或目录（目录递归）。</summary>
+        /// <summary>
+        /// 删除文件或目录（目录递归）。
+        ///
+        /// **回收站开启时 = 移入回收站（可恢复）；关闭时 = 立即永久删除。**
+        /// 返回消息里会体现是哪一种，避免用户误以为还能找回。
+        /// </summary>
         public FileOperationResultDto Delete(string? path, bool recursive, string? actor)
         {
             var full = _guard.Resolve(path);
@@ -464,18 +476,29 @@ namespace Sb.Apps.Pm.Services.FileManager
                 var hasChildren = di.EnumerateFileSystemInfos().Any();
                 if (hasChildren && !recursive)
                     throw new FileManagerException("目录非空，请确认递归删除");
-                SafeDeleteDirectory(full);
-            }
-            else
-            {
-                File.Delete(full);
             }
 
-            Audit(actor, isDir ? "rmdir" : "rm", full, recursive ? "recursive" : null);
+            // 回收站不可用时（配置关闭 / 未装配）优雅降级为直接删除，不能空引用崩溃
+            if (_recycle is { Enabled: true })
+            {
+                var size = isDir ? MeasureSize(full).Size : new FileInfo(full).Length;
+                var row = _recycle.MoveToRecycleBin(full, actor ?? "-", isDir, size);
+                Audit(actor, isDir ? "rmdir->recycle" : "rm->recycle", full, size.ToString());
+                return new FileOperationResultDto
+                {
+                    Path = _guard.ToDisplayPath(full),
+                    Message = $"已移入回收站（可恢复，{FormatSize(size)}）",
+                };
+            }
+
+            if (isDir) SafeDeleteDirectory(full);
+            else File.Delete(full);
+
+            Audit(actor, isDir ? "rmdir" : "rm", full, "permanent");
             return new FileOperationResultDto
             {
                 Path = _guard.ToDisplayPath(full),
-                Message = "删除成功",
+                Message = "已永久删除（回收站已关闭，不可恢复）",
             };
         }
 
@@ -591,6 +614,412 @@ namespace Sb.Apps.Pm.Services.FileManager
             var ascii = new string(fileName.Select(c => c < 128 && c != '"' && c != '\\' ? c : '_').ToArray());
             var encoded = Uri.EscapeDataString(fileName);
             return $"attachment; filename=\"{ascii}\"; filename*=UTF-8''{encoded}";
+        }
+
+        #endregion
+
+        #region 复制 / 移动
+
+        /// <summary>
+        /// 复制或移动文件/目录。
+        /// </summary>
+        /// <param name="move">true = 移动，false = 复制。</param>
+        public FileOperationResultDto CopyOrMove(string? source, string? target, bool move, bool overwrite, string? actor)
+        {
+            var src = _guard.Resolve(source);
+            if (!File.Exists(src) && !Directory.Exists(src))
+                throw new FileManagerException("源文件或目录不存在");
+
+            var isDir = Directory.Exists(src);
+            var dst = _guard.ResolveForCreate(target);
+
+            // 目标已存在：目录保持原样，文件按 overwrite 决定
+            if (Directory.Exists(dst))
+            {
+                dst = Path.Combine(dst, Path.GetFileName(src.TrimEnd(Path.DirectorySeparatorChar)));
+                _guard.ResolveForCreate(dst);
+            }
+
+            if (string.Equals(src.TrimEnd('/'), dst.TrimEnd('/'), StringComparison.Ordinal))
+                throw new FileManagerException("源和目标相同");
+
+            // 防递归：目录不能复制/移动到自己内部
+            if (isDir && PathGuard.IsUnder(dst, src))
+                throw new FileManagerException("不能把目录复制或移动到自己内部");
+
+            if ((File.Exists(dst) || Directory.Exists(dst)) && !overwrite)
+                throw new FileManagerException("目标已存在，请勾选覆盖或改名");
+
+            var parent = Path.GetDirectoryName(dst);
+            if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent))
+                throw new FileManagerException("目标目录不存在");
+
+            try
+            {
+                if (move)
+                {
+                    // 先试原子 move（同盘），跨盘时退化
+                    try
+                    {
+                        if (isDir) Directory.Move(src, dst);
+                        else File.Move(src, dst, overwrite);
+                    }
+                    catch (IOException)
+                    {
+                        if (isDir) CopyDirectory(src, dst);
+                        else File.Copy(src, dst, overwrite);
+                        if (isDir) SafeDeleteDirectory(src);
+                        else File.Delete(src);
+                    }
+                }
+                else
+                {
+                    if (isDir) CopyDirectory(src, dst);
+                    else File.Copy(src, dst, overwrite);
+                }
+            }
+            catch (FileManagerException) { throw; }
+            catch (Exception ex) { throw new FileManagerException($"{(move ? "移动" : "复制")}失败：{ex.Message}"); }
+
+            Audit(actor, move ? "mv" : "cp", src, _guard.ToDisplayPath(dst));
+            return new FileOperationResultDto
+            {
+                Path = _guard.ToDisplayPath(dst),
+                Message = move ? "移动成功" : "复制成功",
+            };
+        }
+
+        private static void CopyDirectory(string src, string dst)
+        {
+            Directory.CreateDirectory(dst);
+            foreach (var dir in Directory.EnumerateDirectories(src, "*", SearchOption.AllDirectories))
+            {
+                Directory.CreateDirectory(Path.Combine(dst, Path.GetRelativePath(src, dir)));
+            }
+            foreach (var file in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
+            {
+                var to = Path.Combine(dst, Path.GetRelativePath(src, file));
+                Directory.CreateDirectory(Path.GetDirectoryName(to)!);
+                File.Copy(file, to, overwrite: true);
+            }
+        }
+
+        #endregion
+
+        #region 批量操作
+
+        /// <summary>批量删除。单项失败不影响其它项，返回逐项结果。</summary>
+        public BatchResultDto BatchDelete(List<string> paths, bool recursive, string? actor)
+            => RunBatch(paths, p => Delete(p, recursive, actor)?.Message ?? "ok");
+
+        /// <summary>批量复制 / 移动。</summary>
+        public BatchResultDto BatchCopyMove(List<string> paths, string targetDir, bool move, bool overwrite, string? actor)
+        {
+            var dir = _guard.Resolve(targetDir);
+            if (!Directory.Exists(dir)) throw new FileManagerException("目标目录不存在");
+            return RunBatch(paths, p =>
+            {
+                var name = Path.GetFileName(p.TrimEnd(Path.DirectorySeparatorChar));
+                return CopyOrMove(p, Path.Combine(dir, name), move, overwrite, actor).Message;
+            });
+        }
+
+        /// <summary>批量 chmod。</summary>
+        public BatchResultDto BatchChmod(List<string> paths, string mode, string? actor)
+            => RunBatch(paths, p => Chmod(p, mode, actor).Message);
+
+        private BatchResultDto RunBatch(List<string> paths, Func<string, string> action)
+        {
+            var list = paths.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct().ToList();
+            if (list.Count == 0) throw new FileManagerException("请至少选择一个条目");
+            if (list.Count > _options.MaxBatchItems)
+                throw new FileManagerException($"单次批量操作不能超过 {_options.MaxBatchItems} 项");
+
+            var result = new BatchResultDto { Total = list.Count };
+            foreach (var p in list)
+            {
+                try
+                {
+                    var msg = action(p);
+                    result.Succeeded++;
+                    result.Items.Add(new BatchItemResultDto { Path = p, Success = true, Message = msg });
+                }
+                catch (Exception ex)
+                {
+                    result.Failed++;
+                    result.Items.Add(new BatchItemResultDto { Path = p, Success = false, Message = ex.Message });
+                }
+            }
+            return result;
+        }
+
+        #endregion
+
+        #region 搜索 / 统计
+
+        /// <summary>
+        /// 按文件名（或内容）搜索。有扫描上限，避免全盘搜索把进程拖死。
+        /// </summary>
+        public SearchResultDto Search(SearchRequestDto req)
+        {
+            var start = _guard.Resolve(req.Path);
+            if (!Directory.Exists(start)) throw new FileManagerException("搜索起点不是目录");
+
+            var maxResults = Math.Clamp(req.MaxResults <= 0 ? _options.MaxSearchResults : req.MaxResults, 1, 5000);
+            var maxScan = Math.Clamp(req.MaxScan <= 0 ? _options.MaxSearchScan : req.MaxScan, 1, 1_000_000);
+
+            var regex = GlobToRegex(req.Pattern);
+            var hasContent = !string.IsNullOrWhiteSpace(req.ContentContains);
+            var result = new SearchResultDto();
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+
+            var opt = new EnumerationOptions
+            {
+                IgnoreInaccessible = true,
+                RecurseSubdirectories = req.Recursive,
+                AttributesToSkip = 0,
+                MaxRecursionDepth = req.Recursive ? 32 : 0,
+            };
+
+            try
+            {
+                foreach (var entry in new DirectoryInfo(start).EnumerateFileSystemInfos("*", opt))
+                {
+                    if (++result.Scanned > maxScan) { result.Truncated = true; break; }
+
+                    if (_options.HideDotFiles && entry.Name.StartsWith('.')) continue;
+                    if (!regex.IsMatch(entry.Name)) continue;
+
+                    if (hasContent)
+                    {
+                        if (entry is not FileInfo fi) continue;
+                        if (fi.Length > 2L * 1024 * 1024) continue; // 内容搜索只读小文件
+                        if (!IsEditableByExtension(Path.GetExtension(fi.Name).TrimStart('.').ToLowerInvariant(), fi.Name)) continue;
+                        try
+                        {
+                            var text = File.ReadAllText(fi.FullName);
+                            if (!text.Contains(req.ContentContains!, StringComparison.OrdinalIgnoreCase)) continue;
+                        }
+                        catch { continue; }
+                    }
+
+                    result.Items.Add(ToEntry(entry));
+                    if (result.Items.Count >= maxResults) { result.Truncated = true; break; }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "搜索过程中断: {Path}", start);
+                result.Truncated = true;
+            }
+
+            sw.Stop();
+            result.ElapsedMs = sw.ElapsedMilliseconds;
+            return result;
+        }
+
+        /// <summary>统计路径大小（目录递归）。用于「属性」面板。</summary>
+        public PathSizeDto MeasurePath(string? path, int maxEntries = 2_000_000)
+        {
+            var full = _guard.Resolve(path);
+            var dto = new PathSizeDto { Path = _guard.ToDisplayPath(full) };
+
+            if (File.Exists(full))
+            {
+                dto.Size = new FileInfo(full).Length;
+                dto.FileCount = 1;
+                return dto;
+            }
+            if (!Directory.Exists(full)) throw new FileManagerException("路径不存在");
+
+            var m = MeasureSize(full, maxEntries);
+            dto.Size = m.Size;
+            dto.FileCount = m.Files;
+            dto.DirCount = m.Dirs;
+            dto.Truncated = m.Truncated;
+            return dto;
+        }
+
+        private (long Size, long Files, long Dirs, bool Truncated) MeasureSize(string dir, int maxEntries = 2_000_000)
+        {
+            long size = 0, files = 0, dirs = 0;
+            try
+            {
+                foreach (var e in new DirectoryInfo(dir).EnumerateFileSystemInfos("*",
+                             new EnumerationOptions { IgnoreInaccessible = true, RecurseSubdirectories = true, AttributesToSkip = 0 }))
+                {
+                    if (files + dirs >= maxEntries) return (size, files, dirs, true);
+                    if (e is FileInfo f) { size += f.Length; files++; }
+                    else dirs++;
+                }
+            }
+            catch { /* 权限不足的地方跳过 */ }
+            return (size, files, dirs, false);
+        }
+
+        /// <summary>通配符转正则（* → .*，? → .，其余转义）。无通配符时按子串匹配。</summary>
+        private static System.Text.RegularExpressions.Regex GlobToRegex(string pattern)
+        {
+            if (string.IsNullOrWhiteSpace(pattern)) pattern = "*";
+            if (!pattern.Contains('*') && !pattern.Contains('?')) pattern = "*" + pattern + "*";
+            var sb = new System.Text.StringBuilder("^");
+            foreach (var c in pattern)
+            {
+                sb.Append(c switch
+                {
+                    '*' => ".*",
+                    '?' => ".",
+                    _ => System.Text.RegularExpressions.Regex.Escape(c.ToString()),
+                });
+            }
+            sb.Append('$');
+            return new System.Text.RegularExpressions.Regex(sb.ToString(),
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant,
+                TimeSpan.FromSeconds(2));
+        }
+
+        #endregion
+
+        #region 属主 / 备注
+
+        /// <summary>修改属主 / 属组。</summary>
+        public FileOperationResultDto Chown(string? path, string owner, string? group, bool recursive, string? actor)
+        {
+            if (!_options.AllowChown) throw new FileManagerException("当前配置已禁用 chown");
+            if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+                throw new FileManagerException("当前操作系统不支持 chown");
+
+            var full = _guard.Resolve(path);
+            if (!File.Exists(full) && !Directory.Exists(full)) throw new FileManagerException("文件或目录不存在");
+
+            var users = ListSystemUsers();
+            var user = users.FirstOrDefault(u => u.Name == owner || u.Uid.ToString() == owner)
+                       ?? throw new FileManagerException($"用户不存在：{owner}");
+            var gid = user.Gid;
+            if (!string.IsNullOrWhiteSpace(group))
+            {
+                var g = ListSystemUsers().FirstOrDefault(u => u.Name == group || u.Uid.ToString() == group);
+                gid = g?.Gid ?? gid;
+            }
+
+            var count = 0;
+            void Apply(string p)
+            {
+                if (chown(p, (uint)user.Uid, (uint)gid) == 0) count++;
+                else _logger.LogDebug("chown 失败: {Path}", p);
+            }
+
+            Apply(full);
+            if (recursive && Directory.Exists(full))
+            {
+                foreach (var e in new DirectoryInfo(full).EnumerateFileSystemInfos("*",
+                             new EnumerationOptions { IgnoreInaccessible = true, RecurseSubdirectories = true, AttributesToSkip = 0 }))
+                {
+                    Apply(e.FullName);
+                }
+            }
+
+            Audit(actor, "chown", full, $"{user.Name}:{gid}{(recursive ? " -R" : "")}");
+            return new FileOperationResultDto
+            {
+                Path = _guard.ToDisplayPath(full),
+                Message = $"属主已改为 {user.Name}:{gid}（{count} 项）",
+            };
+        }
+
+        /// <summary>备注功能依赖数据库，这里统一兜住。</summary>
+        private void EnsureDb()
+        {
+            if (_fsql == null)
+                throw new FileManagerException("备注功能需要数据库支持，当前环境未初始化");
+        }
+
+        /// <summary>列出系统用户（读 /etc/passwd）。</summary>
+        public List<SystemUserDto> ListSystemUsers()
+        {
+            var list = new List<SystemUserDto>();
+            if (!File.Exists("/etc/passwd")) return list;
+            try
+            {
+                foreach (var line in File.ReadLines("/etc/passwd"))
+                {
+                    var parts = line.Split(':');
+                    if (parts.Length < 4) continue;
+                    if (!int.TryParse(parts[2], out var uid)) continue;
+                    if (!int.TryParse(parts[3], out var gid)) continue;
+                    list.Add(new SystemUserDto { Name = parts[0], Uid = uid, Gid = gid });
+                }
+            }
+            catch (Exception ex) { _logger.LogDebug(ex, "读取 /etc/passwd 失败"); }
+            return list;
+        }
+
+        /// <summary>读取某路径的备注 / 收藏状态。<br/>备注依赖数据库，未装配 IFreeSql 时抛业务异常而不是空引用。</summary>
+        public FileNoteDto GetNote(string? path)
+        {
+            EnsureDb();
+            var full = _guard.Resolve(path);
+            var row = _fsql.Select<FileNote>().Where(n => n.Path == full).First();
+            return new FileNoteDto
+            {
+                Path = _guard.ToDisplayPath(full),
+                Note = row?.Note ?? string.Empty,
+                Favorite = row?.Favorite ?? false,
+                UpdatedTime = row == null ? string.Empty
+                    : DateTime.SpecifyKind(row.UpdatedTime, DateTimeKind.Utc).ToString("yyyy-MM-ddTHH:mm:ssZ"),
+            };
+        }
+
+        /// <summary>保存备注 / 收藏。两者都空则删除这一行。</summary>
+        public FileNoteDto SaveNote(string? path, string? note, bool favorite, string? actor)
+        {
+            EnsureDb();
+            var full = _guard.Resolve(path);
+            var row = _fsql.Select<FileNote>().Where(n => n.Path == full).First();
+
+            if (string.IsNullOrWhiteSpace(note) && !favorite)
+            {
+                if (row != null) _fsql.Delete<FileNote>(row.Id).ExecuteAffrows();
+                return new FileNoteDto { Path = _guard.ToDisplayPath(full) };
+            }
+
+            if (row == null)
+            {
+                row = new FileNote { Path = full, Note = note, Favorite = favorite, CreatedBy = actor ?? "-", UpdatedTime = AppTime.UtcNow };
+                _fsql.Insert(row).ExecuteAffrows();
+            }
+            else
+            {
+                _fsql.Update<FileNote>(row.Id)
+                    .Set(n => n.Note, note)
+                    .Set(n => n.Favorite, favorite)
+                    .Set(n => n.UpdatedTime, AppTime.UtcNow)
+                    .ExecuteAffrows();
+            }
+
+            return new FileNoteDto
+            {
+                Path = _guard.ToDisplayPath(full),
+                Note = note ?? string.Empty,
+                Favorite = favorite,
+                UpdatedTime = AppTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+            };
+        }
+
+        /// <summary>收藏列表（前端快捷入口用）。</summary>
+        public List<FileNoteDto> ListFavorites()
+        {
+            EnsureDb();
+            return _fsql.Select<FileNote>().Where(n => n.Favorite)
+                .OrderByDescending(n => n.UpdatedTime)
+                .ToList()
+                .Select(n => new FileNoteDto
+                {
+                    Path = n.Path,
+                    Note = n.Note ?? string.Empty,
+                    Favorite = true,
+                    UpdatedTime = DateTime.SpecifyKind(n.UpdatedTime, DateTimeKind.Utc).ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                }).ToList();
         }
 
         #endregion

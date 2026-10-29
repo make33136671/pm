@@ -185,6 +185,11 @@ internal static class Program
         Check("含 ASCII 兜底 filename", cd.Contains("filename=\""), cd);
         Check("含 RFC5987 filename*", cd.Contains("filename*=UTF-8''"), cd);
         Check("中文已 percent-encode", cd.Contains("%E4%B8%AD%E6%96%87"), cd);
+
+        // ===== 新增能力：压缩 / 解压 / 复制移动 / 搜索 / 大小统计 =====
+        var extra = FileSystemTests.Run(sandbox);
+        _pass += extra.Pass;
+        _fail += extra.Fail;
     }
 
     // ==================== 工具 ====================
@@ -205,7 +210,8 @@ internal static class Program
         };
         var guard = new PathGuard(options, NullLogger<PathGuard>.Instance);
         var env = new FakeHostEnvironment();
-        return new FileManagerService(guard, options, env, NullLogger<FileManagerService>.Instance);
+        // 回收站与备注依赖 IFreeSql，本组测试不覆盖（需要真实数据库环境）
+        return new FileManagerService(guard, options, env, null!, null!, NullLogger<FileManagerService>.Instance);
     }
 
     private sealed class FakeHostEnvironment : Microsoft.Extensions.Hosting.IHostEnvironment
