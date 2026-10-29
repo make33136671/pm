@@ -39,12 +39,11 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
     </PackageReference>
-    <!-- 两个功能插件：引包即启用（授权管理 + 备份接收端）。
-         插件名义依赖正常版 SB.Framework.Core 0.3.0，但 NoLicense 包产出 dll 同名，
-         由顶层 WebApi.NoLicense 收敛成 NoLicense 变体一份 dll（§8.6）。 -->
-    <PackageReference Include="SB.Feature.LicenseManage" Version="0.1.1" />
-    <PackageReference Include="SB.Feature.BackupReceive" Version="0.1.1" />
-    <PackageReference Include="SB.Feature.AccessToken" Version="0.2.3" />
+    <!-- 功能插件：引包即启用。
+         授权管理（SB.Feature.LicenseManage）已从框架主线移除（见 sb-framework
+         AI_Plugin_Architecture 勘误），BaGet 上无此包，PM 代码也未使用，故移除引用。 -->
+    <PackageReference Include="SB.Feature.BackupReceive" Version="0.1.2" />
+    <PackageReference Include="SB.Feature.AccessToken" Version="0.2.4" />
     <ProjectReference Include="..\Sb.Apps.Pm.Services\Sb.Apps.Pm.Services.csproj" />
   </ItemGroup>
 </Project>
