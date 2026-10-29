@@ -1018,6 +1018,21 @@ namespace Sb.Apps.Pm.Services.FileManager
                 throw new FileManagerException("备注功能需要数据库支持，当前环境未初始化");
         }
 
+
+        /// <summary>/etc/passwd 解析结果缓存（60 秒），避免列目录时每项都读文件。</summary>
+        private List<SystemUserDto>? _usersCache;
+        private DateTime _usersCacheAt = DateTime.MinValue;
+
+        private List<SystemUserDto> GetSystemUsersCached()
+        {
+            var now = AppTime.UtcNow;
+            if (_usersCache != null && (now - _usersCacheAt).TotalSeconds < 60)
+                return _usersCache;
+
+            _usersCache = ListSystemUsers();
+            _usersCacheAt = now;
+            return _usersCache;
+        }
         /// <summary>列出系统用户（读 /etc/passwd）。</summary>
         public List<SystemUserDto> ListSystemUsers()
         {
@@ -1125,8 +1140,13 @@ namespace Sb.Apps.Pm.Services.FileManager
                 mode = GetMode(info.FullName);
                 if (OperatingSystem.IsLinux() && TryGetOwner(info.FullName, out var uid, out var gid))
                 {
-                    owner = uid.ToString(CultureInfo.InvariantCulture);
-                    group = gid.ToString(CultureInfo.InvariantCulture);
+                    // 尽量显示用户名而不是数字 uid/gid（面板可读性），
+                    // 反查结果按整表缓存，避免每个条目都读 /etc/passwd
+                    var users = GetSystemUsersCached();
+                    var u = users.FirstOrDefault(x => x.Uid == uid);
+                    var g = users.FirstOrDefault(x => x.Gid == gid);
+                    owner = u?.Name ?? uid.ToString(CultureInfo.InvariantCulture);
+                    group = g?.Name ?? gid.ToString(CultureInfo.InvariantCulture);
                 }
             }
             catch (Exception ex)
@@ -1372,16 +1392,21 @@ namespace Sb.Apps.Pm.Services.FileManager
 
         /// <summary>
         /// Linux struct stat 的**前 40 字节**在各架构上一致：
-        ///   st_dev(8) st_ino(8) st_nlink(8) st_mode(4) st_uid(4) st_gid(4) + 4 字节 padding。
+        ///   offset 0: st_dev(8)   offset 8: st_ino(8)   offset 16: st_nlink(8)
+        ///   offset 24: st_mode(4) offset 28: st_uid(4)  offset 32: st_gid(4)
         ///
         /// 注意：inode/u32 在不同 ABI 下宽度不同（x86_64 的 st_nlink 是 u64，arm64/riscv 是 u32），
         /// 所以**不能**按某个 arch 逐字段声明结构体——那样会读错偏移甚至越界。
         /// 这里用 144 字节的不透明缓冲区（glibc 各架构 sizeof(struct stat) ≤ 144），
-        /// 只按固定偏移（user 24 / group 28）读 uid/gid，绝对安全。
+        /// 只按固定偏移读 uid/gid，不会越界。
         /// </summary>
         private const int StatBufferSize = 144;
-        private const int StatUidOffset = 24;
-        private const int StatGidOffset = 28;
+        // 实测（x86_64 glibc，容器内验证）：
+        //   offset 24 = st_mode，offset 28 = st_uid，offset 32 = st_gid
+        // 之前误写成 24/28（把 mode 当成了 uid），导致列表里属主显示成 16877 之类
+        // 的乱码（其实就是 st_mode 的十进制值）。
+        private const int StatUidOffset = 28;
+        private const int StatGidOffset = 32;
 
         [DllImport("libc", SetLastError = true, EntryPoint = "stat")]
         private static extern int stat_native(string path, byte[] buffer);

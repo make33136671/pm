@@ -73,6 +73,10 @@ const selectedPaths = ref<string[]>([]);
 
 const treeData = ref<any[]>([]);
 const treeExpanded = ref<string[]>([]);
+/// 已加载过的节点（antd 靠它避免重复触发 loadData）
+const treeLoaded = ref<string[]>([]);
+/// 树里高亮的节点（与 currentPath 双向同步）
+const treeSelected = ref<string[]>([]);
 const treeLoading = ref(false);
 
 // 视图模式：列表 / 搜索
@@ -86,6 +90,8 @@ async function loadDir(path?: string) {
     listing.value = await listDirectory(path ?? currentPath.value, showHidden.value);
     currentPath.value = listing.value?.path ?? '/';
     selectedPaths.value = [];
+    // 让左侧树跟着当前目录高亮并自动展开
+    treeSelected.value = [currentPath.value];
     if (!treeExpanded.value.includes(currentPath.value)) {
       treeExpanded.value = [...treeExpanded.value, currentPath.value];
     }
@@ -136,41 +142,62 @@ async function loadRoots() {
 /** 根目录加载失败时的兜底：直接给 / */
 function rootsInit() {
   currentPath.value = '/';
+  treeSelected.value = ['/'];
   treeData.value = [{ title: '/', key: '/', isLeaf: false }];
 }
 
 // ==================== 目录树 ====================
 
-async function onLoadTreeData(node: any) {
+/**
+ * 懒加载子目录。
+ *
+ * ⚠️ antd 4.x 的 `loadData` 签名是 `(treeNode: EventDataNode) => Promise<any>`，
+ * 直接传节点本身；早期写成了 `node.event.node.key` 导致取不到 key、
+ * 请求路径变成 undefined，树就永远展不开（已踩坑）。
+ */
+async function onLoadTreeData(treeNode: any) {
+  const key = String(treeNode?.key ?? treeNode?.eventKey ?? '');
+  if (!key) return;
+
   treeLoading.value = true;
   try {
-    const dirs = await listDirectories(node.event.node.key);
+    const dirs = await listDirectories(key);
     const children = (dirs ?? []).map((d: FileEntry) => ({
       title: d.name,
       key: d.path,
       isLeaf: false,
     }));
+
     const attach = (nodes: any[]): any[] =>
       nodes.map((n) =>
-        n.key === node.event.node.key
+        n.key === key
           ? { ...n, children }
           : n.children
             ? { ...n, children: attach(n.children) }
             : n,
       );
     treeData.value = attach(treeData.value);
+    if (!treeLoaded.value.includes(key)) treeLoaded.value = [...treeLoaded.value, key];
   } catch {
-    treeData.value = treeData.value.map((n: any) =>
-      n.key === node.event.node.key ? { ...n, isLeaf: true } : n,
-    );
+    // 拉不到子目录（无权限/不存在）就把该节点标记为叶子，避免反复重试
+    const markLeaf = (nodes: any[]): any[] =>
+      nodes.map((n) =>
+        n.key === key
+          ? { ...n, isLeaf: true, children: [] }
+          : n.children
+            ? { ...n, children: markLeaf(n.children) }
+            : n,
+      );
+    treeData.value = markLeaf(treeData.value);
+    if (!treeLoaded.value.includes(key)) treeLoaded.value = [...treeLoaded.value, key];
   } finally {
     treeLoading.value = false;
   }
 }
 
 function onTreeSelect(keys: any[]) {
-  const p = keys[0];
-  if (p && p !== currentPath.value) {
+  const p = Array.isArray(keys) ? keys[0] : keys;
+  if (p && String(p) !== currentPath.value) {
     viewMode.value = 'list';
     void loadDir(String(p));
   }
@@ -1022,8 +1049,9 @@ const rowKey = (r: any) => r.path;
         <Spin :spinning="treeLoading">
           <Tree
             v-model:expanded-keys="treeExpanded"
+            v-model:selected-keys="treeSelected"
             :tree-data="treeData"
-            :selected-keys="[currentPath]"
+            :loaded-keys="treeLoaded"
             :load-data="onLoadTreeData"
             show-icon
             block-node
