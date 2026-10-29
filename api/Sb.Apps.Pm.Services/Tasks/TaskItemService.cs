@@ -48,7 +48,9 @@ namespace Sb.Apps.Pm.Services.Tasks
         private readonly AiProviderFactory _aiFactory;
         private readonly DocVersionService _docVersionService;
         private readonly SystemSettingService _settingService;
+#if PM_CHAT_MODULE
         private readonly ChatNotificationService _chatNotify;
+#endif
         private readonly Pipelines.GitLabApiService _gitLabApi;
         private readonly Pipelines.GitRepositoryService _gitRepoService;
 
@@ -57,7 +59,10 @@ namespace Sb.Apps.Pm.Services.Tasks
 
         public TaskItemService(IFreeSql fsql, ILogger<TaskItemService> logger,
             IHttpContextAccessor httpContextAccessor, AiProviderFactory aiFactory, DocVersionService docVersionService,
-            SystemSettingService settingService, ChatNotificationService chatNotify,
+            SystemSettingService settingService,
+#if PM_CHAT_MODULE
+            ChatNotificationService chatNotify,
+#endif
             Pipelines.GitLabApiService gitLabApi, Pipelines.GitRepositoryService gitRepoService) : base(fsql, logger)
         {
             _fsql = fsql;
@@ -65,7 +70,9 @@ namespace Sb.Apps.Pm.Services.Tasks
             _aiFactory = aiFactory;
             _docVersionService = docVersionService;
             _settingService = settingService;
+#if PM_CHAT_MODULE
             _chatNotify = chatNotify;
+#endif
             _gitLabApi = gitLabApi;
             _gitRepoService = gitRepoService;
         }
@@ -388,7 +395,9 @@ namespace Sb.Apps.Pm.Services.Tasks
             SyncRequirementStatus(task.RequirementId);
 
             // 闭环:任务完成 → 回 TG 群通知（fire-and-forget，依赖单例 fsql/connectorManager，安全）
+#if PM_CHAT_MODULE
             _ = _chatNotify.NotifyTaskCompleted(task);
+#endif
 
             return Result.Success("执行成功");
         }
@@ -539,7 +548,9 @@ namespace Sb.Apps.Pm.Services.Tasks
             // 联动:同步关联需求状态(#95)
             SyncRequirementStatus(task.RequirementId);
 
+#if PM_CHAT_MODULE
             _ = _chatNotify.NotifyTaskCompleted(task);
+#endif
             return Result.Success("验收通过");
         }
 

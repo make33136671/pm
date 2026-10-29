@@ -15,7 +15,9 @@ global using Sb.Apps.Pm.Models.Tasks;
 global using Sb.Apps.Pm.Models.WebTerminals;
 global using Sb.Apps.Pm.Services;
 global using Sb.Apps.Pm.Services.Ai;
+#if PM_CHAT_MODULE
 global using Sb.Apps.Pm.Services.Chat;
+#endif
 global using Sb.Apps.Pm.Services.DbMigration;
 global using Sb.Apps.Pm.Services.Documents;
 global using Sb.Apps.Pm.Services.FeatureModules;

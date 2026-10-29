@@ -5,8 +5,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
-    <!-- 引用 PM 真实工程。需要能拉到 NuGet（nuget.saibo.club）。
-         当前环境该源 404 时，用 -p:UseFrameworkSource=true 走本地 sb-framework 源码。 -->
+    <!-- 引用 PM 真实工程（NuGet 源：https://baget.saibo.club/v3/index.json）。
+         用 dotnet run 即可，无需任何 mock。 -->
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\api\Sb.Apps.Pm.Services\Sb.Apps.Pm.Services.csproj" />

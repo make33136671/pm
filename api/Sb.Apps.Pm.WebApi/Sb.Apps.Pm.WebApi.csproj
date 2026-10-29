@@ -5,6 +5,8 @@
     <AssemblyName>Sb.Apps.Pm.WebApi</AssemblyName>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- 与 Sb.Apps.Pm.Services 保持一致：EmitChatModule=true 时恢复 Chat 模块 -->
+    <DefineConstants Condition="'$(EmitChatModule)' == 'true'">$(DefineConstants);PM_CHAT_MODULE</DefineConstants>
   </PropertyGroup>
 
   <!-- Version = 1.0.<git commit 累计数>, sourcelink 自动追加 +sha,
@@ -45,5 +47,11 @@
     <PackageReference Include="SB.Feature.BackupReceive" Version="0.1.2" />
     <PackageReference Include="SB.Feature.AccessToken" Version="0.2.4" />
     <ProjectReference Include="..\Sb.Apps.Pm.Services\Sb.Apps.Pm.Services.csproj" />
+  </ItemGroup>
+
+  <!-- Chat 模块暂时移出编译（与 Sb.Apps.Pm.Services 保持同步，见 api/docs/Chat-Module-Disabled.md） -->
+  <ItemGroup Condition="'$(EmitChatModule)' != 'true'">
+    <Compile Remove="Controllers\Chat\**\*.cs" />
+    <Compile Remove="Controllers\Ai\AiPipelineController.cs" />
   </ItemGroup>
 </Project>

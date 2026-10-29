@@ -29,4 +29,6 @@ global using SB.Framework.Models;
 global using SB.Framework.Services;
 global using SB.Framework.WebApi;
 global using SB.Framework.WebApi.Middleware;
+#if PM_CHAT_MODULE
 global using Sb.Apps.Pm.Services.Chat;
+#endif

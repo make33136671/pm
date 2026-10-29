@@ -6,6 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- EmitChatModule=true 时恢复 Chat 模块（同时定义 PM_CHAT_MODULE 供 #if 使用） -->
+    <DefineConstants Condition="'$(EmitChatModule)' == 'true'">$(DefineConstants);PM_CHAT_MODULE</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
@@ -17,8 +19,22 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="SB.Framework.Services" Version="0.5.2" />
-    <PackageReference Include="SB.Chat" Version="0.1.0-preview.1" />
-    <PackageReference Include="SB.Chat.Telegram" Version="0.1.0-preview.1" />
+    <!-- IWebHostEnvironment 等 ASP.NET 抽象：旧版经 SB.Framework.Services 传递，
+         0.5.2 起不再传递，显式声明（与 SB.Feature.* 插件的做法一致） -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <!-- SB.Chat / SB.Chat.Telegram 已改名为 Sb.Framework.Chat(.Telegram)，且新包 API 是全新设计
+         （ChatMessageEvent -> TelegramRequestMessageBase 等），PM 的 Chat 业务代码尚未迁移。
+         打开 EMIT_CHAT_MODULE 即恢复编译：-p:EmitChatModule=true
+         详见 api/docs/Chat-Module-Disabled.md -->
+    <PackageReference Include="Sb.Framework.Chat" Version="0.1.0-preview.29" Condition="'$(EmitChatModule)' == 'true'" />
+    <PackageReference Include="Sb.Framework.Chat.Telegram" Version="0.1.0-preview.1" Condition="'$(EmitChatModule)' == 'true'" />
     <ProjectReference Include="..\Sb.Apps.Pm.Models\Sb.Apps.Pm.Models.csproj" />
   </ItemGroup>
+
+  <!-- Chat 模块暂时移出编译（见文首说明） -->
+  <ItemGroup Condition="'$(EmitChatModule)' != 'true'">
+    <Compile Remove="Chat\**\*.cs" />
+    <Compile Remove="Modules\ChatModuleInitializer.cs" />
+  </ItemGroup>
+
 </Project>
