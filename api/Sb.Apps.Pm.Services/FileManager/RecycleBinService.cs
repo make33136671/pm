@@ -61,29 +61,37 @@ namespace Sb.Apps.Pm.Services.FileManager
                 Size = size,
                 DeletedAt = AppTime.UtcNow,
                 DeletedBy = actor,
-                StorageName = string.Empty, // 插入拿 Id 后补
+                StorageName = string.Empty,
             };
-            _fsql.Insert(item).ExecuteAffrows();
 
-            var storage = $"{item.Id}_{name}";
+            // 注意：ExecuteAffrows() 不回填自增主键，必须用 ExecuteIdentity()。
+            // 之前用 ExecuteAffrows 导致 Id 恒为 0，存储名变成 '0_xxx'，
+            // 列表返回的 id 为空、恢复时按空 StorageName 找不到行（实测踩坑）。
+            var id = (int)_fsql.Insert(item).ExecuteIdentity();
+            if (id <= 0)
+                throw new FileManagerException("写入回收站记录失败");
+
+            var storage = $"{id}_{name}";
             var dest = Path.Combine(RootDir, storage);
+            item.Id = id;
+            item.StorageName = storage;
 
             try
             {
                 if (isDirectory) Directory.Move(fullPath, dest);
                 else File.Move(fullPath, dest);
+
+                // 只有移动成功才落 StorageName，失败时整行删除（见 catch）
+                _fsql.Update<FileRecycleItem>(id)
+                    .Set(r => r.StorageName, storage)
+                    .ExecuteAffrows();
             }
             catch
             {
                 // 移动失败就撤销记录，避免出现「记录在但文件不在」的幽灵条目
-                _fsql.Delete<FileRecycleItem>(item.Id).ExecuteAffrows();
+                _fsql.Delete<FileRecycleItem>(id).ExecuteAffrows();
                 throw;
             }
-
-            _fsql.Update<FileRecycleItem>(item.Id)
-                .Set(r => r.StorageName, storage)
-                .ExecuteAffrows();
-            item.StorageName = storage;
 
             EnforceQuotaAsync().ConfigureAwait(false);
             return item;
@@ -93,6 +101,7 @@ namespace Sb.Apps.Pm.Services.FileManager
         public RecycleBinListDto List()
         {
             var rows = _fsql.Select<FileRecycleItem>()
+                .Where(r => r.StorageName != "")
                 .OrderByDescending(r => r.DeletedAt)
                 .ToList();
 

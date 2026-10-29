@@ -27,7 +27,7 @@ namespace Sb.Apps.Pm.Services.FileManager
 
         public string ModuleName => "文件管理";
         public int InitOrder => 255;   // 紧跟网页终端(250)之后
-        public Type[] GetEntityTypes() => [];
+        public Type[] GetEntityTypes() => [typeof(FileRecycleItem), typeof(FileNote)];
         public List<MenuDefinition> GetMenus() => new()
         {
             new MenuDefinition
