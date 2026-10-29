@@ -135,6 +135,47 @@ function onPong(t: number) {
   connState.value = rtt > HIGH_LATENCY_MS ? 'high' : 'connected';
 }
 
+// ==================== 自动重连 ====================
+// 场景：公网走 Cloudflare 时，网络抖动/边缘节点切换会让 WebSocket 异常断开。
+// 原实现断开即放弃，用户必须手动点重连，体验上就是「频繁断连」。
+// 这里做指数退避自动重连，最大 8 次，期间灯变黄提示「重连中」。
+
+let reconnectAttempt = 0;
+// 主动销毁中（区分组件主动关闭与网络异常断开）
+let destroying = false;
+let reconnectTimer: null | ReturnType<typeof setTimeout> = null;
+const MAX_RECONNECT = 8;
+
+function clearReconnect() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
+function scheduleReconnect(code?: number) {
+  clearReconnect();
+  if (props.readonly) return;
+  if (reconnectAttempt >= MAX_RECONNECT) {
+    dlog(`重连放弃（已达 ${MAX_RECONNECT} 次）`);
+    emit('closed', `连接已断开（重连 ${MAX_RECONNECT} 次失败）`);
+    return;
+  }
+
+  reconnectAttempt += 1;
+  const delay = Math.min(1000 * 2 ** (reconnectAttempt - 1), 10000);
+  connState.value = 'high'; // 黄灯 = 重连中
+  dlog(`断连 code=${code}，第 ${reconnectAttempt} 次重连将在 ${delay}ms 后`);
+
+  reconnectTimer = setTimeout(() => {
+    dlog(`执行第 ${reconnectAttempt} 次重连`);
+    try {
+      setup(props.sessionId);
+    } catch (e) {
+      dlog(`重连异常: ${String(e)}`);
+    }
+  }, delay);
+}
 // 重连:重建 ws(setup 内会先 destroy 再连,后端发 snapshot 还原缓冲区)
 function reconnect() {
   if (props.readonly) return;
@@ -197,6 +238,7 @@ function sendResize() {
 
 function setup(sessionId: number) {
   if (!containerRef.value) return;
+  destroying = false;
   // 复用还是重建?最简单的是销毁重建
   destroy();
 
@@ -239,6 +281,9 @@ function setup(sessionId: number) {
   ws.addEventListener('open', () => {
     connState.value = 'connected';
     latencyMs.value = -1;
+    // 连上即重置重连计数，下次断连重新从 1 次开始退避
+    reconnectAttempt = 0;
+    clearReconnect();
     startPing();
     sendResize();
     term?.focus();
@@ -263,15 +308,22 @@ function setup(sessionId: number) {
       }
     }
   });
-  ws.addEventListener('close', () => {
+  ws.addEventListener('close', (ev) => {
     connState.value = 'closed';
     stopPing();
-    emit('closed', '连接已断开');
+    if (destroying) return; // 主动销毁不重连
+    // 服务端主动关闭（1000 正常关闭 / exit 帧已处理）不重连；异常断开自动重连
+    const code = (ev as CloseEvent).code;
+    const normal = code === 1000 || code === 1001;
+    if (normal) {
+      emit('closed', '连接已关闭');
+      return;
+    }
+    scheduleReconnect(code);
   });
   ws.addEventListener('error', () => {
-    connState.value = 'closed';
-    stopPing();
-    emit('closed', '连接错误');
+    // error 之后浏览器一定会再触发 close，重连逻辑统一放在 close 里，避免重复调度
+    dlog('ws-error');
   });
 
   // 版本号 — 浮层显示
@@ -505,7 +557,11 @@ function termScrollBottom() {
 }
 
 function destroy() {
+  destroying = true;
   stopPing();
+  // 清掉待执行的重连，避免组件销毁后仍去新建 WebSocket
+  clearReconnect();
+  reconnectAttempt = 0;
   resizeObserver?.disconnect();
   resizeObserver = null;
   ws?.close();
