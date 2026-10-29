@@ -36,13 +36,16 @@ echo | tee -a "$OUT"
 
 echo "--- 3. 延迟与丢包（60 秒）---" | tee -a "$OUT"
 TEE ping -c 60 -i 1 "$PEER" | tail -4
-echo | TEE tee -a "$OUT"
+echo | tee -a "$OUT"
 
 echo "--- 4. MTU 探测 ---" | tee -a "$OUT"
 IFACE=$(ip route get "$PEER" 2>/dev/null | grep -oE 'dev [^ ]+' | awk '{print $2}')
 echo "出口网卡: ${IFACE:-未知}" | tee -a "$OUT"
 [ -n "${IFACE:-}" ] && ip link show "$IFACE" | head -1 | tee -a "$OUT"
-for s in 1472 1400 1380 1360 1340 1320 1300 1200; do
+# 注意：tun 接口会丢弃总长 > 自身 MTU 的 IP 包，故能通的 payload 上限 = 接口MTU - 28。
+# 若接口 MTU=1300，则 payload 1300(=1328字节) 必然不通，最大可通 payload 为 1272。
+echo "（提示：payload 1300 通 = 接口 MTU >=1328；payload 1272 通 = 接口 MTU >=1300）" | tee -a "$OUT"
+for s in 1472 1400 1380 1360 1340 1328 1320 1300 1272 1200; do
   if ping -c 2 -W 2 -M do -s "$s" "$PEER" >/dev/null 2>&1; then
     echo "  payload $s => 通 (MTU=$((s+28)))" | tee -a "$OUT"
   else

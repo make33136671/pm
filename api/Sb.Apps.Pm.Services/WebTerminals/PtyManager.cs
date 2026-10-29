@@ -210,30 +210,52 @@ public sealed class PtyManager : IDisposable
 
     public bool Attach(int sessionId, IPtyClient client)
     {
-        if (!_sessions.TryGetValue(sessionId, out var rs)) return false;
+        if (!_sessions.TryGetValue(sessionId, out var rs))
+        {
+            _logger.LogWarning("[webterm] Attach 失败：会话不存在 s={SessionId}", sessionId);
+            return false;
+        }
         lock (rs.Lock)
         {
             // 已有客户端: 主动踢掉(单 WS 约束,Q5 a)
+            // 必须用 Replaced(4001) 而非默认 1000 —— 前端把 1000 判为「正常结束」不重连，
+            // 用 1000 会让被顶替的旧标签页彻底僵死（表现为「经常断连、必须手动恢复」）。
             var prev = rs.Client;
             rs.Client = client;
             rs.LastActiveAt = DateTime.Now;
             if (prev != null)
-                _ = prev.CloseAsync("被同账号新连接顶替");
+            {
+                // 断连诊断：顶替是「莫名断连」的高频来源（多标签页 / 刷新 / 重连竞态），必须留痕
+                _logger.LogWarning(
+                    "[webterm] 顶替旧连接（单 WS 约束）s={SessionId} 旧连接将以 4001 关闭",
+                    sessionId);
+                _ = prev.CloseAsync("被同账号新连接顶替", CloseCodes.Replaced);
+            }
+            else
+            {
+                _logger.LogInformation("[webterm] Attach 成功 s={SessionId}", sessionId);
+            }
         }
         return true;
     }
 
     public void Detach(int sessionId, IPtyClient client)
     {
-        if (!_sessions.TryGetValue(sessionId, out var rs)) return;
+        if (!_sessions.TryGetValue(sessionId, out var rs))
+        {
+            _logger.LogDebug("[webterm] Detach：会话已不存在 s={SessionId}", sessionId);
+            return;
+        }
         lock (rs.Lock)
         {
-            if (ReferenceEquals(rs.Client, client))
+            var wasActive = ReferenceEquals(rs.Client, client);
+            if (wasActive)
                 rs.Client = null;
             rs.LastActiveAt = DateTime.Now;
+            _logger.LogInformation(
+                "[webterm] Detach s={SessionId} 是否当前连接={WasActive}", sessionId, wasActive);
         }
     }
-
     public Task SendInputAsync(int sessionId, ReadOnlyMemory<byte> data)
     {
         if (!_sessions.TryGetValue(sessionId, out var rs)) return Task.CompletedTask;

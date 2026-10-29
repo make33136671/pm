@@ -112,8 +112,11 @@ function startPing() {
     if (ws?.readyState === WebSocket.OPEN) {
       // 上一个 ping 仍未回 → 链路卡顿,先按「已等待时长」标黄,不等 pong
       if (pendingPingAt !== 0) {
-        latencyMs.value = Date.now() - pendingPingAt;
+        const waited = Date.now() - pendingPingAt;
+        latencyMs.value = waited;
         connState.value = 'high';
+        // 超过 3 秒没回 pong，判定链路卡顿（写 localStorage + HTTP 上报）
+        if (waited > 3000) dlog(`pong 超时 已等待=${waited}ms ${context()}`);
       }
       pendingPingAt = Date.now();
       try {
@@ -143,6 +146,11 @@ function onPong(t: number) {
 let reconnectAttempt = 0;
 // 主动销毁中（区分组件主动关闭与网络异常断开）
 let destroying = false;
+/** 本连接的建立时刻（用于算存活时长，断连诊断关键指标） */
+let openedAt = 0;
+// 连接代次：每次 setup() 自增。旧连接的异步事件迟到时（close/error 在新建连接之后才到），
+// 只认当前代次的连接，避免「旧连接 close 事件误触发新一轮重连」造成重连风暴。
+let wsGeneration = 0;
 let reconnectTimer: null | ReturnType<typeof setTimeout> = null;
 const MAX_RECONNECT = 8;
 
@@ -193,20 +201,115 @@ const debug = ref(
   ) || localStorage.getItem('webterm:debug') === '1',
 );
 const debugLogs = ref<string[]>([]);
+// ==================== 断连诊断日志（debug 版本核心） ====================
+// 设计要点（见 docs/webterm/网页终端断连问题与调试日志.md §5.3）：
+//   1. 断连类事件无条件写 localStorage 缓冲（不依赖 debug 开关），保留最近 80 条
+//   2. 连接还活着 → 照旧 WS 推送
+//   3. 连接已断 → navigator.sendBeacon 直接 POST /webterm/clientlog（不依赖 WS）
+//   4. 下次 WS 建立成功 → 补传缓冲区历史
+
+const LOGBUF_KEY = 'webterm:logbuf';
+const LOGBUF_MAX = 80;
+/** 断连/重连相关关键词：命中即无条件落盘 */
+const CRITICAL_RE = /断连|ws-error|重连|关闭|close|error|unload/i;
+
+function readBuf(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem(LOGBUF_KEY) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function writeBuf(lines: string[]) {
+  try {
+    localStorage.setItem(LOGBUF_KEY, JSON.stringify(lines.slice(-LOGBUF_MAX)));
+  } catch {
+    /* localStorage 满/禁用，忽略 */
+  }
+}
+
+/** 采集断连上下文：一句话说清「是断网还是服务端关的、页面是否在后台」 */
+function context(): string {
+  const parts = [
+    `online=${navigator.onLine}`,
+    `vis=${document.visibilityState}`,
+    `ua=${navigator.userAgent.slice(0, 60)}`,
+  ];
+  if (ws) {
+    parts.push(`rs=${ws.readyState}`);
+  }
+  return parts.join(' ');
+}
+
+/** 不依赖 WS 的 HTTP 上报（sendBeacon 优先，页面卸载时也能发出） */
+function postLog(lines: string[], sessionId?: number) {
+  if (!lines.length) return;
+  const payload = JSON.stringify({
+    sessionId: sessionId ?? null,
+    lines,
+    ts: Date.now(),
+    ctx: context(),
+  });
+  const url = `${apiURL}/webterm/clientlog?token=${encodeURIComponent(accessStore.accessToken || '')}`;
+
+  try {
+    if (typeof navigator.sendBeacon === 'function') {
+      const blob = new Blob([payload], { type: 'application/json' });
+      if (navigator.sendBeacon(url, blob)) return;
+    }
+  } catch {
+    /* sendBeacon 失败，回退 fetch */
+  }
+
+  try {
+    void fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload,
+      keepalive: true,
+    });
+  } catch {
+    /* 彻底失败就只留 localStorage */
+  }
+}
+
 function dlog(msg: string) {
-  if (!debug.value) return;
-  const ts = new Date().toISOString().slice(14, 23);
+  const ts = new Date().toISOString().slice(11, 23);
   const line = `${ts} ${msg}`;
-  debugLogs.value.push(line);
-  if (debugLogs.value.length > 40) debugLogs.value.shift();
-  // 同步推到后端 logger,移动端不用 copy 浮层
+
+  // 1. 关键事件无条件进本地缓冲（debug 关也记，否则线上永远看不到断连原因）
+  if (CRITICAL_RE.test(msg)) {
+    const buf = readBuf();
+    buf.push(line);
+    writeBuf(buf);
+  }
+
+  // 2. debug 浮层
+  if (debug.value) {
+    debugLogs.value.push(line);
+    if (debugLogs.value.length > 40) debugLogs.value.shift();
+  }
+
+  // 3. 连接活着 → WS 推送；已断 → HTTP 上报（这是断连那一刻唯一能落盘的路）
   if (ws?.readyState === WebSocket.OPEN) {
     try {
-      ws.send(JSON.stringify({ type: 'clientlog', msg: line }));
+      ws.send(JSON.stringify({ type: 'clientlog', msg: `${line} | ${context()}` }));
+      return;
     } catch {
-      /* ws 状态变化忽略 */
+      /* 落到下面走 HTTP */
     }
   }
+  postLog([`${line} | ${context()}`], props.sessionId);
+}
+
+/** 连接建立后补传本地积压的断连日志 */
+function flushLogBuf() {
+  const buf = readBuf();
+  if (buf.length === 0) return;
+  postLog(buf.slice(-LOGBUF_MAX), props.sessionId);
+  writeBuf([]);
+  dlog(`已补传 ${buf.length} 条历史断连日志`);
 }
 
 function buildWsUrl(sessionId: number, token: string): string {
@@ -276,9 +379,13 @@ function setup(sessionId: number) {
 
   const token = accessStore.accessToken || '';
   ws = new WebSocket(buildWsUrl(sessionId, token));
+  // 当前代次：本连接的所有事件回调都先比对代次，迟到的旧事件直接忽略
+  const gen = ++wsGeneration;
+  const isStale = () => gen !== wsGeneration;
   ws.binaryType = 'arraybuffer';
 
   ws.addEventListener('open', () => {
+    if (isStale()) return;
     connState.value = 'connected';
     latencyMs.value = -1;
     // 连上即重置重连计数，下次断连重新从 1 次开始退避
@@ -289,9 +396,13 @@ function setup(sessionId: number) {
     term?.focus();
     // 版本号在 ws OPEN 后再 dlog 一次 — 这样能通过 clientlog 上报到后端
     // (setup() 早期那条 dlog 时 ws 还 CONNECTING,clientlog 只进浮层不入服务端日志)
+    openedAt = Date.now();
     dlog(`ws-open ${WEBTERM_DEBUG_VERSION}`);
+    // 上次断连时没能发出去的日志，这里补传
+    flushLogBuf();
   });
   ws.addEventListener('message', (ev) => {
+    if (isStale()) return;
     if (ev.data instanceof ArrayBuffer) {
       term?.write(new Uint8Array(ev.data));
     } else if (typeof ev.data === 'string') {
@@ -309,11 +420,23 @@ function setup(sessionId: number) {
     }
   });
   ws.addEventListener('close', (ev) => {
+    // 迟到的旧连接 close 事件：新连接已建立，忽略，否则会触发重复重连
+    if (isStale()) return;
     connState.value = 'closed';
     stopPing();
     if (destroying) return; // 主动销毁不重连
-    // 服务端主动关闭（1000 正常关闭 / exit 帧已处理）不重连；异常断开自动重连
+    const lifespan = Math.round((Date.now() - openedAt) / 1000);
+    dlog(`断连 code=${code} 存活=${lifespan}s ${context()}`);
     const code = (ev as CloseEvent).code;
+    // 被同账号另一连接顶替（后端 CloseCodes.Replaced = 4001）。
+    // 不能自动抢回，否则两台设备会互相顶替形成无限重连风暴；
+    // 这里明确告知用户，由用户决定是否夺回控制权。
+    if (code === 4001) {
+      dlog('被其他设备的同账号连接顶替');
+      emit('closed', '已在其他设备/标签页打开该终端，连接被顶替');
+      return;
+    }
+    // 服务端主动关闭（1000 正常关闭 / exit 帧已处理）不重连；异常断开自动重连
     const normal = code === 1000 || code === 1001;
     if (normal) {
       emit('closed', '连接已关闭');
@@ -564,19 +687,67 @@ function destroy() {
   reconnectAttempt = 0;
   resizeObserver?.disconnect();
   resizeObserver = null;
-  ws?.close();
+  // 代次自增：让旧连接后续所有回调立即失效（迟到的 close 事件不再触发重连）
+  wsGeneration += 1;
+  const old = ws;
   ws = null;
+  if (old) {
+    try {
+      // 1000 正常关闭：服务端看到这是主动断开，不会走「顶替」分支
+      old.close(1000, 'client destroy');
+    } catch {
+      /* 已在关闭中 */
+    }
+  }
   term?.dispose();
   term = null;
   fit = null;
 }
 
+// 页面关闭/刷新/切后台时的断连归因（移动端切后台杀 WS 是最常见误判来源）
+function onPageHide() {
+  const lifespan = openedAt ? Math.round((Date.now() - openedAt) / 1000) : 0;
+  dlog(`页面卸载 pagehide 存活=${lifespan}s ${context()}`);
+  // sendBeacon 保证在卸载过程中也能发出
+  postLog(
+    [`${new Date().toISOString().slice(11, 23)} pagehide 存活=${lifespan}s ${context()}`],
+    props.sessionId,
+  );
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState === 'hidden') {
+    dlog(`页面切后台 hidden ${context()}`);
+  } else {
+    dlog(`页面回前台 visible ${context()}`);
+  }
+}
+
+function onOffline() {
+  dlog(`网络断开 offline ${context()}`);
+}
+
+function onOnline() {
+  dlog(`网络恢复 online ${context()}`);
+}
+
 onMounted(async () => {
+  window.addEventListener('pagehide', onPageHide);
+  document.addEventListener('visibilitychange', onVisibilityChange);
+  window.addEventListener('offline', onOffline);
+  window.addEventListener('online', onOnline);
   // 先拉视觉配置(字体/颜色/光标等);失败也照常用默认值起 xterm
   await loadVisualConfig();
   setup(props.sessionId);
 });
-onBeforeUnmount(() => destroy());
+
+onBeforeUnmount(() => {
+  window.removeEventListener('pagehide', onPageHide);
+  document.removeEventListener('visibilitychange', onVisibilityChange);
+  window.removeEventListener('offline', onOffline);
+  window.removeEventListener('online', onOnline);
+  destroy();
+});
 
 watch(
   () => props.sessionId,
