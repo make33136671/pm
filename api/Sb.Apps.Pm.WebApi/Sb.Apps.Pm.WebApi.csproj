@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Sb.Apps.Pm.WebApi</RootNamespace>
+    <AssemblyName>Sb.Apps.Pm.WebApi</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!-- Version = 1.0.<git commit 累计数>, sourcelink 自动追加 +sha,
+       /admin/App/Info 显示 "1.0.40+0ed40f96..."。
+       AssemblyVersion/FileVersion 固定 1.0.0.0 避开 ushort 上限。
+       git 命令失败(非 git 仓库 / 没装 git) → 兜底 1.0.0,publish 不会中断。 -->
+  <Target Name="SetBuildVersion" BeforeTargets="GetAssemblyVersion;CoreCompile">
+    <Exec Command="git rev-list --count HEAD"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          ConsoleToMSBuild="true"
+          StandardOutputImportance="Low"
+          IgnoreExitCode="true"
+          ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitCommitCount" />
+    </Exec>
+    <PropertyGroup>
+      <GitCommitCount Condition="'$(GitCommitCount)' == ''">0</GitCommitCount>
+      <Version>1.0.$(GitCommitCount)</Version>
+    </PropertyGroup>
+  </Target>
+  <PropertyGroup>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <!-- ENABLE_LICENSE_MANAGE / ENABLE_BACKUP_RECEIVE 已废弃：授权管理/备份接收已是独立插件包，
+         改为引 SB.Feature.* 包即启用（见下方 PackageReference）。 -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SB.Framework.WebApi.NoLicense" Version="0.4.14" />
+    <PackageReference Include="SB.Framework.Core.NoLicense" Version="0.4.6" />
+    <PackageReference Include="SB.Framework.Analyzers.NoLicense" Version="0.4.6">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
+    </PackageReference>
+    <!-- 两个功能插件：引包即启用（授权管理 + 备份接收端）。
+         插件名义依赖正常版 SB.Framework.Core 0.3.0，但 NoLicense 包产出 dll 同名，
+         由顶层 WebApi.NoLicense 收敛成 NoLicense 变体一份 dll（§8.6）。 -->
+    <PackageReference Include="SB.Feature.LicenseManage" Version="0.1.1" />
+    <PackageReference Include="SB.Feature.BackupReceive" Version="0.1.1" />
+    <PackageReference Include="SB.Feature.AccessToken" Version="0.2.3" />
+    <ProjectReference Include="..\Sb.Apps.Pm.Services\Sb.Apps.Pm.Services.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,24 @@
+# 构建产物 / 中间物
+**/bin/
+**/obj/
+dist/
+
+# 版本控制 / IDE
+.git/
+.vs/
+.idea/
+.vscode/
+
+# 文档与脚本（构建镜像用不到）
+docs/
+*.md
+
+# NuGet.config 里那个相对路径本地源在构建上下文外，无影响；保留 NuGet.config 本身（restore 要用）
+
+# 本地配置（生产配置在容器运行时挂载，绝不打进镜像）
+**/appsettings.json
+**/appsettings.Development.json
+
+# 日志 / 运行期数据
+**/logs/
+**/wwwroot/storage/

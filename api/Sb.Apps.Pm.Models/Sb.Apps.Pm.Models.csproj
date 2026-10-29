@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Sb.Apps.Pm.Models</RootNamespace>
+    <AssemblyName>Sb.Apps.Pm.Models</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="SB.Framework.Models.NoLicense" Version="0.4.7" />
+  </ItemGroup>
+</Project>

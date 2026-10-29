@@ -1,0 +1,57 @@
+# Sb.Apps.Pm 部署 compose —— 运行在 saibodev(192.168.10.199)
+#
+# 单容器：supervisor 管 nginx(:80 admin 静态站 + 反代) + dotnet(:6020 内部 API)
+# 网络：macvlan lan-normal，容器独占 LAN IP 192.168.10.73
+# 连库：宿主 mysql 容器 192.168.10.61（库 sbpm_docker，root/111111）
+# 缓存：宿主 redis 容器 192.168.10.63（password=111111）
+# DNS ：首选 192.168.10.56(AdGuard) / 备选 8.8.8.8
+#
+# 访问：http://192.168.10.73   admin/111111
+
+services:
+  pm-api:
+    image: sb-apps-pm:latest
+    container_name: sb-apps-pm
+    restart: unless-stopped
+
+    # webterm 需要 PTY
+    tty: true
+    stdin_open: true
+
+    dns:
+      - 192.168.10.56
+      - 8.8.8.8
+
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - TZ=Asia/Shanghai
+
+    volumes:
+      # 配置（含密钥）— 可写：安装向导可能回写
+      - ./api/appsettings.json:/app/appsettings.json
+      # 安装向导生成的品牌资源 / 上传
+      - ./api/wwwroot/storage:/app/wwwroot/storage
+      # 安装完成标记（持久化；首次安装前此文件须存在且为普通文件）
+      - ./api/installed.lock:/app/installed.lock
+      # Serilog + webterm + nginx 日志
+      - ./api/logs:/app/logs
+      # git clone 工作区（workspace_root 指向这里）
+      - pm_workspace:/data/pm-workspace
+
+    networks:
+      lan-normal:
+        ipv4_address: 192.168.10.73
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1/api/Setup/Status"]
+      interval: 30s
+      timeout: 5s
+      start_period: 70s
+      retries: 3
+
+networks:
+  lan-normal:
+    external: true
+
+volumes:
+  pm_workspace:

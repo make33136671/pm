@@ -1,0 +1,15 @@
+global using Sb.Apps.Pm.Models;
+global using Sb.Apps.Pm.Models.Ai;
+global using Sb.Apps.Pm.Models.Chat;
+global using Sb.Apps.Pm.Models.DbMigration;
+global using Sb.Apps.Pm.Models.Documents;
+global using Sb.Apps.Pm.Models.Dtos;
+global using Sb.Apps.Pm.Models.FeatureModules;
+global using Sb.Apps.Pm.Models.FileManager;
+global using Sb.Apps.Pm.Models.MindMaps;
+global using Sb.Apps.Pm.Models.Pipelines;
+global using Sb.Apps.Pm.Models.Projects;
+global using Sb.Apps.Pm.Models.Requirements;
+global using Sb.Apps.Pm.Models.Servers;
+global using Sb.Apps.Pm.Models.Tasks;
+global using SB.Framework.Models;

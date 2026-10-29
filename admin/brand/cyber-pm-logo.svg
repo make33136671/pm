@@ -1,0 +1,18 @@
+<svg viewBox="0 0 500 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#818CF8"/><stop offset="1" stop-color="#6366F1"/>
+    </linearGradient>
+  </defs>
+  <polygon points="170,100 135,160.62 65,160.62 30,100 65,39.38 135,39.38"
+    fill="url(#g)" stroke="url(#g)" stroke-width="18" stroke-linejoin="round"/>
+  <text x="100" y="103" text-anchor="middle" dominant-baseline="central"
+    font-family="'Inter','Segoe UI',system-ui,sans-serif" font-size="62" font-weight="800"
+    letter-spacing="-1" fill="#0A1124">PM</text>
+  <text x="218" y="90" font-family="'Inter','PingFang SC','Microsoft YaHei',system-ui,sans-serif"
+    font-size="42" font-weight="700" fill="#0F172A">项目管理</text>
+  <text x="220" y="122" font-family="'JetBrains Mono','Inter',monospace" font-size="15"
+    font-weight="600" letter-spacing="2" fill="#6366F1">SB.PM</text>
+  <text x="282" y="122" font-family="'Inter','PingFang SC',system-ui,sans-serif" font-size="13"
+    font-weight="500" fill="#94A3B8">· 项目管理系统</text>
+</svg>

@@ -1,41 +1,52 @@
-# 依赖
+# PM 仓库（api/ + admin/ 同仓管理）
+# 细粒度规则见 api/.gitignore 与 admin/.gitignore，这里只放仓库根级别补充。
+
+# ── 依赖 ──
 node_modules/
 .pnpm-store/
 
-# 构建产物
+# ── 构建产物 ──
+bin/
+obj/
 dist/
 build/
 out/
 *.tsbuildinfo
-bin/
-obj/
+release/
 
-# 日志与临时文件
+# ── 日志与临时文件 ──
 *.log
 logs/
 tmp/
 .tmp/
+*.bak
+*.tmp
 
-# 环境变量与密钥（禁止入库）
-.env
+# ── 密钥 / 凭据（禁止入库）──
+# 注意：不要写 `.env*` 通配 —— admin 的 .env / .env.development / .env.production
+# 是前端构建必需模板，必须入库。只忽略真正含机密的本地覆盖文件。
 .env.local
 .env.*.local
 *.pem
-*.key
+*.pfx
 secrets/
+license_private.key
+client.key
 
-# 编辑器 / 系统
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
-
-# 测试与覆盖率
-coverage/
-.nyc_output/
-
-# 本地冒烟测试产物
+# ── 数据与运行时状态 ──
 *.db
 *.db-shm
 *.db-wal
 installed.lock
+
+# ── 测试与覆盖率 ──
+coverage/
+.nyc_output/
+TestResults/
+
+# ── 编辑器 / 系统 ──
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp

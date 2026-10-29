@@ -1,0 +1,399 @@
+{
+  "generated": "2026-06-11",
+  "nodes": [
+    {
+      "id": 20,
+      "title": "设备外部工具调用",
+      "project": "安卓虚拟机管理平台",
+      "pid": 12
+    },
+    {
+      "id": 19,
+      "title": "通讯录文本导入",
+      "project": "安卓虚拟机管理平台",
+      "pid": 12
+    },
+    {
+      "id": 18,
+      "title": "模拟人工操作动作原语",
+      "project": "安卓虚拟机管理平台",
+      "pid": 12
+    },
+    {
+      "id": 17,
+      "title": "多来源设备统一管理(容器/物理机/虚拟机并存)",
+      "project": "安卓虚拟机管理平台",
+      "pid": 12
+    },
+    {
+      "id": 16,
+      "title": "Docker Compose 一键部署",
+      "project": "安卓虚拟机管理平台",
+      "pid": 12
+    },
+    {
+      "id": 15,
+      "title": "ASP.NET Core 10 后端 API",
+      "project": "安卓虚拟机管理平台",
+      "pid": 12
+    },
+    {
+      "id": 14,
+      "title": "Vben Admin 前端界面",
+      "project": "安卓虚拟机管理平台",
+      "pid": 12
+    },
+    {
+      "id": 13,
+      "title": "多设备池化管理",
+      "project": "安卓虚拟机管理平台",
+      "pid": 12
+    },
+    {
+      "id": 12,
+      "title": "自动化任务编排",
+      "project": "安卓虚拟机管理平台",
+      "pid": 12
+    },
+    {
+      "id": 11,
+      "title": "实时画面回传",
+      "project": "安卓虚拟机管理平台",
+      "pid": 12
+    },
+    {
+      "id": 10,
+      "title": "ADB 命令实时执行",
+      "project": "安卓虚拟机管理平台",
+      "pid": 12
+    },
+    {
+      "id": 9,
+      "title": "redroid 容器快速创建与销毁",
+      "project": "安卓虚拟机管理平台",
+      "pid": 12
+    },
+    {
+      "id": 31,
+      "title": "【改进】PM 系统改进建议汇总（AVM 复盘）",
+      "project": "赛博项目管理",
+      "pid": 11
+    },
+    {
+      "id": 30,
+      "title": "【基础设施】Agent Schema API + Skill 增强（AI 免探路录入）",
+      "project": "赛博项目管理",
+      "pid": 11
+    },
+    {
+      "id": 29,
+      "title": "【AI】项目详情 - 资源管理 AI 一键分析",
+      "project": "赛博项目管理",
+      "pid": 11
+    },
+    {
+      "id": 28,
+      "title": "【优化】项目管理 - 任务列表 UI 调整",
+      "project": "赛博项目管理",
+      "pid": 11
+    },
+    {
+      "id": 27,
+      "title": "【AI】基础设施搭建（llama.cpp 接入）",
+      "project": "赛博项目管理",
+      "pid": 11
+    },
+    {
+      "id": 26,
+      "title": "【AI】智能搜索",
+      "project": "赛博项目管理",
+      "pid": 11
+    },
+    {
+      "id": 25,
+      "title": "【AI】代码质量分析",
+      "project": "赛博项目管理",
+      "pid": 11
+    },
+    {
+      "id": 24,
+      "title": "【AI】变更日志自动生成",
+      "project": "赛博项目管理",
+      "pid": 11
+    },
+    {
+      "id": 23,
+      "title": "【AI】需求/任务智能补充",
+      "project": "赛博项目管理",
+      "pid": 11
+    },
+    {
+      "id": 22,
+      "title": "【AI】需求一键任务分解",
+      "project": "赛博项目管理",
+      "pid": 11
+    },
+    {
+      "id": 7,
+      "title": "测试-自动创建-请忽略",
+      "project": "赛博项目管理",
+      "pid": 11
+    },
+    {
+      "id": 6,
+      "title": "测试-自动创建-请忽略",
+      "project": "赛博项目管理",
+      "pid": 11
+    }
+  ],
+  "edges": [
+    {
+      "source": 10,
+      "target": 18,
+      "weight": 2
+    },
+    {
+      "source": 15,
+      "target": 17,
+      "weight": 4
+    },
+    {
+      "source": 16,
+      "target": 17,
+      "weight": 2
+    },
+    {
+      "source": 15,
+      "target": 16,
+      "weight": 3
+    },
+    {
+      "source": 30,
+      "target": 31,
+      "weight": 6
+    },
+    {
+      "source": 11,
+      "target": 16,
+      "weight": 2
+    },
+    {
+      "source": 10,
+      "target": 15,
+      "weight": 2
+    },
+    {
+      "source": 27,
+      "target": 31,
+      "weight": 2
+    },
+    {
+      "source": 25,
+      "target": 31,
+      "weight": 2
+    },
+    {
+      "source": 22,
+      "target": 31,
+      "weight": 2
+    },
+    {
+      "source": 27,
+      "target": 30,
+      "weight": 2
+    },
+    {
+      "source": 25,
+      "target": 30,
+      "weight": 2
+    },
+    {
+      "source": 22,
+      "target": 30,
+      "weight": 2
+    },
+    {
+      "source": 25,
+      "target": 27,
+      "weight": 2
+    },
+    {
+      "source": 22,
+      "target": 27,
+      "weight": 2
+    },
+    {
+      "source": 22,
+      "target": 25,
+      "weight": 4
+    },
+    {
+      "source": 26,
+      "target": 29,
+      "weight": 2
+    },
+    {
+      "source": 25,
+      "target": 26,
+      "weight": 4
+    },
+    {
+      "source": 24,
+      "target": 26,
+      "weight": 3
+    },
+    {
+      "source": 23,
+      "target": 26,
+      "weight": 3
+    },
+    {
+      "source": 22,
+      "target": 26,
+      "weight": 3
+    },
+    {
+      "source": 24,
+      "target": 25,
+      "weight": 3
+    },
+    {
+      "source": 23,
+      "target": 25,
+      "weight": 3
+    },
+    {
+      "source": 23,
+      "target": 24,
+      "weight": 3
+    },
+    {
+      "source": 22,
+      "target": 24,
+      "weight": 3
+    },
+    {
+      "source": 22,
+      "target": 23,
+      "weight": 3
+    },
+    {
+      "source": 6,
+      "target": 7,
+      "weight": 6
+    }
+  ],
+  "hot_terms": [
+    {
+      "term": "AI",
+      "count": 9
+    },
+    {
+      "term": "PM",
+      "count": 5
+    },
+    {
+      "term": "按钮",
+      "count": 5
+    },
+    {
+      "term": "优先级",
+      "count": 5
+    },
+    {
+      "term": "API",
+      "count": 4
+    },
+    {
+      "term": "Agent",
+      "count": 4
+    },
+    {
+      "term": "adb",
+      "count": 3
+    },
+    {
+      "term": "redroid",
+      "count": 3
+    },
+    {
+      "term": "Docker",
+      "count": 3
+    },
+    {
+      "term": "容器",
+      "count": 3
+    },
+    {
+      "term": "ADB",
+      "count": 3
+    },
+    {
+      "term": "shell",
+      "count": 2
+    },
+    {
+      "term": "DotNet",
+      "count": 2
+    },
+    {
+      "term": "支持",
+      "count": 2
+    },
+    {
+      "term": "noVNC",
+      "count": 2
+    },
+    {
+      "term": "10",
+      "count": 2
+    },
+    {
+      "term": "命令",
+      "count": 2
+    },
+    {
+      "term": "AVM",
+      "count": 2
+    },
+    {
+      "term": "Schema",
+      "count": 2
+    },
+    {
+      "term": "任务",
+      "count": 2
+    },
+    {
+      "term": "P3",
+      "count": 2
+    },
+    {
+      "term": "Hermes",
+      "count": 2
+    },
+    {
+      "term": "测试",
+      "count": 2
+    },
+    {
+      "term": "接入验证需求",
+      "count": 2
+    },
+    {
+      "term": "自动创建",
+      "count": 2
+    },
+    {
+      "term": "请忽略",
+      "count": 2
+    }
+  ],
+  "stats": {
+    "project_count": 2,
+    "doc_count": 24,
+    "edge_count": 27,
+    "unique_terms": 274,
+    "hot_terms": 26
+  }
+}

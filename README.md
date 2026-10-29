@@ -1,6 +1,102 @@
-# pm
+# PM — 赛博项目管理平台
 
-PM 项目仓库。
+> 基于 **SB Framework** 的派生业务系统，前后端同仓管理。
+
+## 仓库结构
+
+```
+pm/
+├── api/     # 后端（.NET 10）：Sb.Apps.Pm.WebApi / Services / Models / Tests
+├── admin/   # 管理端（Vue + Vben Admin），派生自 sb-framework-admin
+├── docs/    # 文档（含 FileManager.md）
+├── scripts/ # 仓库运维脚本（GitHub 同步等）
+├── tests/   # 跨模块冒烟测试
+└── deploy-local.sh   # 本机发布：构建 api + admin 并 rsync 到 /opt
+```
+
+## 技术栈
+
+| 层 | 技术 |
+|---|---|
+| 后端 | .NET 10 · ASP.NET Core · FreeSql（MySQL/PostgreSQL）· Serilog |
+| 前端 | Vue 3 · Vite · Vben Admin 5 · Ant Design Vue · Turbo + pnpm workspace |
+| 基座 | `SB.Framework.*` NuGet 包 + `SB.Feature.*` 插件 |
+| 部署 | Docker（`api/Dockerfile` + `docker-compose.yml`），或 `deploy-local.sh` 直发 `/opt` |
+
+## 核心模块
+
+### 后端 `api/`
+
+| 子工程 | 内容 |
+|---|---|
+| `Sb.Apps.Pm.WebApi` | 启动壳 + Controllers（按业务分目录） |
+| `Sb.Apps.Pm.Services` | 业务服务（项目/需求/任务/文档/服务器/网页终端/文件管理/AI/Chat/Pipeline） |
+| `Sb.Apps.Pm.Models` | 实体 + DTO + 枚举 |
+| `Sb.Apps.Pm.Services.Tests` | xUnit 测试 |
+
+启动入口 `Program.cs` 只有 5 行：`AddSbFramework()` → `Build()` → `UseWebSockets()` → `UseWebTerminalEndpoint()` → `UseSbFramework()`。
+
+业务装配在 `Sb.Apps.Pm.Services/PmCoreFeature.cs`（PM 自身作为一个 `IFeatureModule`）。
+
+### 网页终端（webterm）
+
+**本地 root PTY**，不是 SSH 到远端：
+
+```
+浏览器 (xterm.js) ──WSS /webterm/ws/{id}?token=JWT──► WebTerminalEndpoint（早期中间件）
+   ──► PtyManager ──► NativePty ──► posix_spawn ──► /bin/bash -i
+```
+
+- 会话可绑定项目/子项目，cwd 自动落到其 `workspace_root`
+- 支持 `RunAsUser`（`sudo -u`）
+- 输出走 `CircularByteBuffer`（4MB 回滚）+ 落盘日志 `logs/cli/`
+- WebSocket 端点用**早期中间件**注册，绕开 endpoint routing（历史踩坑见代码注释）
+
+### 文件管理（FileManager）
+
+服务器文件浏览 / 编辑 / 上传下载 / chmod，**与 webterm 权限对等**。
+
+完整说明见 [docs/FileManager.md](docs/FileManager.md)。
+
+### 管理端 `admin/`
+
+38 个业务模块，位于 `apps/web-antd/src/views/`。菜单由后端 `IModuleInitializer.GetMenus()`
+驱动，前端无需手写路由。
+
+跟随上游基座更新：
+
+```bash
+git remote add upstream https://gitlab.saibo.club/saibo/framework/sb-framework-admin.git
+git fetch upstream && git merge upstream/main
+```
+
+---
+
+## 开发
+
+```bash
+# 后端
+cd api && dotnet build sb-apps-pm.sln
+
+# 前端
+cd admin && pnpm install && pnpm dev:antd
+
+# 本机发布（构建 + rsync 到 /opt/api 与 /opt/admin）
+./deploy-local.sh          # 全量
+./deploy-local.sh api      # 仅后端
+./deploy-local.sh admin    # 仅前端
+```
+
+> `deploy-local.sh` 会保留线上的 `appsettings*.json`、`installed.lock`、`client.key`、`logs/`，
+> 不会覆盖这些文件。
+
+### 冒烟测试
+
+```bash
+cd tests/Sb.Apps.Pm.FileManager.Tests && dotnet run
+```
+
+---
 
 ## 远程仓库（双远程）
 
@@ -9,105 +105,43 @@ PM 项目仓库。
 | `origin` | 内网 GitLab `saibo/apps/pm` | **日常开发主用**，push / pull 都走这里 |
 | `github` | https://github.com/make33136671/pm.git | **公网备份**，定期同步 |
 
-`origin` 走内网 GitLab（`http://192.168.2.110:8080/saibo/apps/pm.git`，凭据已存在 `~/.git-credentials`），
-`github` 始终保留，不会被删除或改名。
-
-## 日常流程
+### 日常流程
 
 ```bash
-# 1. 日常提交（走 GitLab）
 git add -A && git commit -m "feat: xxx"
-git push origin main
-
-# 2. 定期同步到 GitHub（见 scripts/sync-github.sh）
-bash scripts/sync-github.sh
+git push origin main              # 日常走 GitLab
+bash scripts/sync-github.sh       # 定期同步 GitHub
 ```
 
-## 同步约定
+### 同步约定
 
 - **更新代码优先 GitLab**：日常 `push` / `pull` 一律 `origin`。
-- **定期同步 GitHub**：用 `scripts/sync-github.sh`，先把 GitLab 拉到最新，再推到 `github`，带 3 次重试。
+- **定期同步 GitHub**：`scripts/sync-github.sh` 先拉 GitLab 再推 `github`，网络错误重试 3 次，认证错误立即退出。
 - **永远保留 GitHub 远程**：任何清理操作都不得 `git remote remove github`。
-- 首次从 GitHub 拉取时若本地为空，可先 `git pull github main --rebase` 再推 origin。
 
-## 分支
+### GitHub 推送凭据（**当前未配置**）
 
-主分支 `main`，与两个远程保持一致。
+现状：`github` 地址已配好，但本机没有 GitHub 凭据，推送会报
+`fatal: could not read Username for 'https://github.com'`。
 
----
-
-## GitHub 推送凭据（**当前未配置，需要你提供一次**）
-
-现状：`github` 远程地址已配好，但**本机没有 GitHub 凭据**。表现是：
-
-```
-fatal: could not read Username for 'https://github.com'
-```
-
-（`push` 需要凭据；`pull` 匿名只对公开仓库有效。当前 `make33136671/pm` 匿名访问同样返回 404，
-说明它不存在或已改私有。）
-
-### 配一次就永久生效
-
-**方式 1：Token 写进 credential store（推荐，HTTPS）**
+**方式 1：Token 写进 credential store**
 
 ```bash
-# 把 <TOKEN> 换成 GitHub Personal Access Token（需 repo 权限）
-git config --global credential.helper store
 echo "https://oauth2:<TOKEN>@github.com" >> ~/.git-credentials
 chmod 600 ~/.git-credentials
-
-# 验证
-cd /root/saibo/apps/pm && git remote -v | grep github
-git ls-remote github        # 成功则无输出或列出 refs；失败会提示认证问题
+git ls-remote github      # 验证
 ```
 
-> 配好后 `scripts/sync-github.sh` 就能直接推送，无需再改代码。
-
-**方式 2：SSH（本机已有 `~/.ssh/id_ed25519`）**
+**方式 2：SSH**（本机已有 `~/.ssh/id_ed25519`）
 
 ```bash
 # 把 ~/.ssh/id_ed25519.pub 加到 GitHub → Settings → SSH keys
 git remote set-url github git@github.com:make33136671/pm.git
-ssh -T git@github.com       # 第一次需确认 host key
 ```
 
 ### 定时同步
 
-`scripts/sync-github.sh` 是同步逻辑（拉 GitLab → 推 GitHub，网络错误重试 3 次，认证错误立即退出）。
-
-`scripts/setup-sync-cron.sh` 负责装定时任务，会**自动探测**本机有没有 cron：
+`scripts/setup-sync-cron.sh` 会自动探测本机有没有 cron：
 
 - 有 cron → 写入 crontab（每天 03:30）
-- 没有 cron（110 默认如此）→ 打印 systemd timer / n8n 两种现成配置，你选一条启用
-
----
-
-## 内容
-
-### `SB.Feature.FileManager` —— 服务器文件管理器
-
-给 PM 后台加的**图形化文件管理**能力，与已有 web shell 互补：
-
-- 目录浏览（面包屑 + 懒加载目录树 + 磁盘用量）
-- 在线编辑文本文件（二进制识别、编码兼容、并发 hash 保护、原子写、自动 `.bak`）
-- 新建 / 重命名 / 删除 / chmod / 上传 / 下载
-
-完整说明见 [SB.Feature.FileManager/README.md](SB.Feature.FileManager/README.md)。
-
-### 快速冒烟测试
-
-```bash
-cd tests/SB.Feature.FileManager.Smoke
-dotnet run     # 52 项断言，覆盖路径穿越 / 白名单 / 软链逃逸 / 并发写 / 权限位
-```
-
----
-
-## 开发环境
-
-- .NET 10（`dotnet --version` 应为 10.x）
-- 后端插件依赖 `sb-framework` 源码（`SB.Framework.Core` / `SB.Framework.Models` / `SB.Framework.Analyzers`），
-  以 ProjectReference 方式引用同级目录 `../../sb/sb-framework/`；发布时改为 PackageReference
-  `SB.Framework.Core` / `SB.Framework.Models`。
-- 前端页面按 Vben Admin（`sb-framework-admin`）的 views 约定书写，用 `admin/install.sh` 拷进去。
+- 没有 cron（110 默认如此）→ 打印 systemd timer / n8n 两套现成配置，择一启用

@@ -1,0 +1,17 @@
+* @root
+/CODEOWNERS @root
+/CONTRIBUTING.md @root
+/README.md @root
+/.gitlab-ci.yml @root
+/.gitlab/ @root
+/NuGet.config @root
+
+# 启动壳 / 配置
+/Sb.Apps.Pm.WebApi/Program.cs @root
+/Sb.Apps.Pm.WebApi/appsettings.json @root
+/Sb.Apps.Pm.WebApi/appsettings.Development.json @root
+
+# ModuleInitializer / 配置 / 启动 hook（影响数据库结构和菜单）
+/Sb.Apps.Pm.Services/Modules/ @root
+/Sb.Apps.Pm.Services/Configuration/ @root
+/Sb.Apps.Pm.Services/Startup/ @root

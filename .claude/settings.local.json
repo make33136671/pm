@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm -rf /opt/admin/*)",
+      "Bash(unzip -q /opt/projects/saibo/apps/pm/admin/apps/web-antd/dist.zip -d /opt/admin)",
+      "Read(//opt/admin/**)",
+      "Bash(rsync -a --delete --exclude=appsettings.json --exclude=appsettings.*.json --exclude=installed.lock --exclude=logs/ --exclude=appsettings-history/ --exclude=client.key /opt/projects/saibo/apps/pm/dist/api/ /opt/api/)",
+      "Read(//opt/api/**)"
+    ]
+  }
+}
