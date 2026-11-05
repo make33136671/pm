@@ -216,3 +216,94 @@ tail -f logs/webterm-diag-*.log
    否则可能加载到旧 chunk
 4. 网页终端的 WebSocket 反代**必须透传 `Upgrade` 头**且设置长超时
 5. 诊断日志日期按 **UTC** 计算，与本地日期可能差一天
+
+---
+
+## 六、无域名访问（IP 直连）
+
+> 场景：临时排查、内网没有 DNS、或不想配域名时，用 IP 直接打开管理后台。
+
+### 110 上的实现（已配置）
+
+```
+http://192.168.2.110:8088/          ← 前端（管理后台）
+https://pm.saibo.club/              ← 同一份前端（域名访问，推荐）
+```
+
+两者共用同一套静态文件与后端，行为完全一致。
+
+**配置位置**：
+
+| 文件 | 改动 |
+|---|---|
+| `/root/docker/dns-proxy/docker-compose.yml` | proxy 服务加 `- "192.168.2.110:8088:8088"` |
+| `/root/docker/dns-proxy/Caddyfile` | 末尾加 `http://192.168.2.110:8088 { ... }` 站点块 |
+
+Caddy 站点块（与域名块分流规则一致）：
+
+```
+http://192.168.2.110:8088 {
+  handle /admin/*   { reverse_proxy 192.168.2.110:6200 }
+  handle /api/*     { reverse_proxy 192.168.2.110:6200 }
+  handle /webterm/* { reverse_proxy 192.168.2.110:6200 }
+  handle /storage/* { reverse_proxy 192.168.2.110:6200 }
+  handle {
+    root * /data/pm-admin
+    try_files {path} /index.html
+    file_server
+  }
+}
+```
+
+**为什么不复用 443**：
+
+1. 443 按 `Host` 头分流，IP 访问时 Host 是 `192.168.2.110`，会命中 `*.saibo.club` 兜底块返回 404
+2. 443 的证书只覆盖 `*.saibo.club`，IP 访问必然证书告警
+
+所以用**独立明文 HTTP 端口**最省事，且不影响现有域名链路。
+
+### 换成 nginx 部署时
+
+```nginx
+server {
+    listen 8088;
+    server_name _;
+    root /usr/share/nginx/html;   # dist/admin 内容
+
+    location ~ ^/(admin|api|webterm|storage)/ {
+        proxy_pass http://127.0.0.1:6200;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+```
+
+### 验证
+
+```bash
+# 前端
+curl -I http://192.168.2.110:8088/
+# 期望：200 text/html
+
+# 后端接口
+curl http://192.168.2.110:8088/admin/Setup/Status
+# 期望：{"code":0,"message":"ok","data":{"installed":true}}
+
+# 登录
+curl -X POST http://192.168.2.110:8088/admin/Auth/Login \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=admin&password=111111"
+
+# WebSocket（网页终端）—— 返回 400 是正常的（非 WS 请求）
+curl -o /dev/null -w "%{http_code}" http://192.168.2.110:8088/webterm/ws/1
+```
