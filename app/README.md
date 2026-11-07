@@ -33,7 +33,13 @@
 WebView 用 `loadHtmlString` 加载页面时 origin 是 `about:blank`，
 **无法用相对路径访问 Flutter assets 里的 js/css**。
 
-所以构建前要把 xterm.js 内联进 `js/terminal.html`（脚本：`scripts/fetch_xterm.sh` + `scripts/inline_terminal.py`）。
+所以构建前要把 xterm.js 内联进 `js/terminal.html`（脚本：`scripts/fetch_xterm.sh` + `scripts/inline_terminal.js`）。
+
+> ⚠️ `js/terminal.html`、`xterm.js`、`xterm.css`、`addon-fit.js` **都是 .gitignore 里的生成物，不入库**。
+> 新克隆的仓库里 `js/` 只有模板 `terminal.template.html`，**必须先生成再构建**，
+> 否则 `flutter pub get` 会报 asset 缺失。
+>
+> **Windows 上没有 bash，`fetch_xterm.sh` 跑不了**，用 PowerShell 等价步骤（见 `docs/BUILD.md` 第九节）。
 
 ---
 
@@ -149,7 +155,7 @@ app/
 │   └── terminal.html              终端页面（构建后内联 xterm.js）
 ├── scripts/
 │   ├── fetch_xterm.sh             下载 xterm.js + 内联
-│   └── inline_terminal.py         内联脚本
+│   └── inline_terminal.js         内联脚本
 └── android/                       Android 平台配置
 ```
 
@@ -203,7 +209,8 @@ App 保存成功后立即重读一次刷新 hash，避免下次保存被误拦�
 
 ## 八、后续计划
 
-- [ ] 首版 APK 构建与真机验证
+- [x] 首版 APK 构建（2026-11-07 在 Win11 出包，流程见 `docs/BUILD.md` 第九节）
+- [ ] 真机验证
 - [ ] 终端手势：双指缩放字号、长按选择复制
 - [ ] 文件管理：回收站查看与恢复、压缩解压
 - [ ] 生物识别解锁（指纹/面容）替代每次输入密码

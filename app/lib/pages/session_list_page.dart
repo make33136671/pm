@@ -169,9 +169,11 @@ class _SessionListPageState extends State<SessionListPage> {
       );
     }
 
-    return RefreshIndicator(
-      onRefresh: _load,
-      child: _sessions.isEmpty
+    return Stack(
+      children: [
+        RefreshIndicator(
+          onRefresh: _load,
+          child: _sessions.isEmpty
           ? ListView(
               children: [
                 const SizedBox(height: 120),
@@ -250,6 +252,13 @@ class _SessionListPageState extends State<SessionListPage> {
                 );
               },
             ),
+        ),
+        FloatingActionButton(
+          onPressed: _createSession,
+          tooltip: '新建会话',
+          child: const Icon(Icons.add),
+        ),
+      ],
     );
   }
 }

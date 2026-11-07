@@ -212,5 +212,180 @@ WebSocket 走的是 `/webterm/ws/{id}?token=xxx`。
 | Flutter 工程代码 | ✅ 完成（约 2300 行） |
 | xterm.js 内联 | ✅ 已验证（297KB 自包含） |
 | Android 平台配置 | ✅ 完成 |
-| **APK 构建** | ⬜ **未做**（缺 Flutter/JDK/Android SDK） |
+| 构建环境（Win11） | ✅ 已就绪（见第九节） |
+| **APK 构建** | ✅ 已在 Win11 成功出包（54.8MB，debug 签名） |
 | 真机验证 | ⬜ 未做 |
+
+---
+
+## 九、Windows 11 构建（实测可行）
+
+> 本节是 2026-11-07 在 `192.168.2.100` 上**实际跑通**的流程，不是推测。
+
+### 9.1 环境落点
+
+| 组件 | 路径 / 版本 |
+|---|---|
+| Flutter | `D:\develop\flutter`（3.47.2 stable） |
+| JDK | `D:\develop\jdk17`（Temurin 17.0.20.1） |
+| Android SDK | `D:\Users\33136\AppData\Local\Android\Sdk` |
+| 工程 | `D:\projects\saibo\apps\pm` |
+
+Flutter 的两项配置（写进 `%USERPROFILE%\.flutter_settings`，只需一次）：
+
+```powershell
+flutter config --android-sdk "D:\Users\33136\AppData\Local\Android\Sdk"
+flutter config --jdk-dir   "D:\develop\jdk17"
+flutter doctor --android-licenses     # 全部输入 y
+```
+
+`flutter doctor` 应达到：Android toolchain `[√]`。
+
+### 9.2 三个必踩的坑
+
+**坑 1：`maven.google.com` 不通**
+
+`flutter doctor` 的 Network resources 永远报红，且 Gradle 默认仓库会卡死。
+必须在 `android/build.gradle.kts` 和 `android/settings.gradle.kts` 的 `repositories {}
+` 首位加阿里云镜像：
+
+```kotlin
+maven { url = uri("https://maven.aliyun.com/repository/google") }
+maven { url = uri("https://maven.aliyun.com/repository/public") }
+maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
+```
+
+**坑 2：`js/` 下只有模板，没有产物**
+
+`terminal.html` / `xterm.js` / `xterm.css` / `addon-fit.js` **都在 .gitignore 里**，
+新克隆的仓库没有它们，`flutter pub get` 会因 asset 缺失而失败。
+`fetch_xterm.sh` 是 bash 脚本、Windows 跑不了，用 PowerShell 等价：
+
+```powershell
+$js  = "D:\projects\saibo\apps\pm\app\js"
+$dl  = "$env:TEMP\xterm-dl"
+
+$pkgs = @(
+  @{ url="https://registry.npmmirror.com/@xterm/xterm/-/xterm-5.5.0.tgz";
+     src="lib/xterm.js";       dst="xterm.js" },
+  @{ url="https://registry.npmmirror.com/@xterm/xterm/-/xterm-5.5.0.tgz";
+     src="css/xterm.css";      dst="xterm.css" },
+  @{ url="https://registry.npmmirror.com/@xterm/addon-fit/-/addon-fit-0.10.0.tgz";
+     src="lib/addon-fit.js";   dst="addon-fit.js" }
+)
+foreach ($p in $pkgs) {
+  $d = Join-Path $dl ([IO.Path]::GetFileNameWithoutExtension($p.dst))
+  New-Item -ItemType Directory $d -Force | Out-Null
+  $tgz = "$d.tgz"
+  if (!(Test-Path $tgz)) {
+    Invoke-WebRequest $p.url -OutFile $tgz -UseBasicParsing
+  }
+  tar.exe -xzf $tgz -C $d
+  Copy-Item "$d\package\$($p.src)" (Join-Path $js $p.dst) -Force
+}
+
+node D:\projects\saibo\apps\pm\app\scripts\inline_terminal.js
+```
+
+成功时 `terminal.html` 约 **305 KB**。
+
+**坑 3：不要用 `cat > file` 写远端文件**
+
+Windows 默认 shell 是 PowerShell 5.1，**不认** `cat > path` 重定向。
+从 Linux 侧写文件请用 base64：
+
+```bash
+base64 -w0 local.txt   # 拿到字符串后在远端：
+# [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String("<b64>"))
+```
+
+### 9.3 出包
+
+```powershell
+$env:JAVA_HOME = "D:\develop\jdk17"
+cd D:\projects\saibo\apps\pm\app
+flutter pub get
+flutter build apk --release
+```
+
+产物：`D:\projects\saibo\apps\pm\app\build\app\outputs\flutter-apk\app-release.apk`
+
+> 未配置 `key.properties` 时用 debug 签名（能装，不可上架），见第六节。
+
+### 9.4 远程构建（从 Linux 容器发起）
+
+```bash
+ssh -i /root/.ssh/id_ed25519 33136@192.168.2.100 \
+  'cd D:\projects\saibo\apps\pm\app; flutter build apk --release'
+```
+
+注意：远程 PowerShell 默认输出 GBK 中文会乱码，命令前加
+`[Console]::OutputEncoding=[Text.Encoding]::UTF8` 即可，不改系统设置。
+
+---
+
+## 十、2026-11-07 首次出包时修掉的问题（重要）
+
+仓库原状态在 Win11 上**编不过**，以下是实际遇到的失败与修法，按出现顺序：
+
+### 10.1 版本不兼容（Flutter 3.47.2 的硬性下限）
+
+`DependencyVersionChecker.kt` 里的实测阈值：
+
+| 组件 | 低于此值**直接失败** | 原值 | 改为 |
+|---|---|---|---|
+| Gradle | 8.14.0 | 8.9.0 | **8.14.3** |
+| AGP | 8.11.1 | 8.7.0 | **8.13.2** |
+| Kotlin | 2.2.20 | 1.9.25 | **2.2.20** |
+
+> 不要上 AGP 9.x —— 会触发 `android.newDsl` 不兼容，Flutter 官方也建议先留在 8.x。
+
+### 10.2 Gradle 分发包下载卡死
+
+`services.gradle.org` 的 215MB 包会卡在 0 字节。wrapper 改走腾讯镜像：
+
+```properties
+distributionUrl=https\://mirrors.cloud.tencent.com/gradle/gradle-8.14.3-bin.zip
+```
+
+### 10.3 `session.dart` 缺 foundation 导入（真实代码 bug）
+
+```
+Error: Type 'ChangeNotifier' not found.
+```
+
+`lib/session.dart` 用了 `ChangeNotifier` 却没导入，且以 `../api/` 引用同级目录。
+已补：
+
+```dart
+import 'package:flutter/foundation.dart';
+
+import 'api/pm_api.dart';
+import 'models/auth.dart';
+```
+
+### 10.4 「新建会话」按钮不存在（真实 UI bug）
+
+`_createSession()` 实现完整但**无人调用**，而空状态文案写着「点右下角 + 新建」。
+已在 `session_list_page.dart` 用 `Stack` 包住列表并加 `FloatingActionButton`。
+
+### 10.5 整个 `res/` 目录缺失
+
+```
+AAPT: error: resource mipmap/ic_launcher not found
+AAPT: error: resource style/LaunchTheme not found
+```
+
+Android 资源目录当初根本没生成。已从 Flutter 官方模板
+`packages/flutter_tools/templates/app/android.tmpl/app/src/main/res` 补齐：
+`drawable/`、`drawable-v21/`、`values/styles.xml`、`values-night/styles.xml`、
+五个密度档的 `ic_launcher.png`。
+
+### 10.6 远程写文件的正确姿势
+
+Windows 默认 shell 是 PowerShell 5.1：
+
+- **不认** `cat > path` 重定向
+- **不认** UTF-8 无 BOM 的中文脚本（按 GBK 解析会报 `missing terminator`）
+
+远端写文件用 base64 传字节；PowerShell 脚本内容**保持纯 ASCII**（注释也别用中文）。

@@ -9,7 +9,7 @@
 #
 # 产物：
 #   js/xterm.js / js/xterm.css / js/addon-fit.js
-#   js/terminal.html（已被 inline_terminal.py 改成自包含版本）
+#   js/terminal.html（已被 inline_terminal.js 改成自包含版本）
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

@@ -77,7 +77,7 @@ class _TerminalPageState extends State<TerminalPage> {
     // 加载本地打包的 terminal.html
     final html = await rootBundle.loadString('js/terminal.html');
     // 注意：xterm.js 走 flutter assets 无法被 webview 相对路径加载，
-    // 所以把 CSS/JS 内容内联进 HTML（build 前由 scripts/inline_terminal.py 生成）
+    // 所以把 CSS/JS 内容内联进 HTML（build 前由 scripts/inline_terminal.js 生成）
     await _controller.loadHtmlString(html);
   }
 
