@@ -52,10 +52,15 @@ class Session extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 退出登录。
+  ///
+  /// 保留 [baseUrl]，下次登录页会自动带出上次的服务器地址；
+  /// 若要连别的服务器，在登录页直接改输入框即可。
   Future<void> clear() async {
     token = null;
     username = '';
     displayName = '';
+    _api = null;
     final sp = await SharedPreferences.getInstance();
     await sp.remove(_kToken);
     await sp.remove(_kUsername);

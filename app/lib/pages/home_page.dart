@@ -46,6 +46,39 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  /// 切换服务器：退出当前登录并回到登录页（服务器地址会带出来供修改）
+  Future<void> _switchServer() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('切换服务器'),
+        content: Text(
+          '当前连接：${widget.session.baseUrl}\n\n'
+          '切换后会退出登录，回到登录页修改服务器地址。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('切换'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    await widget.session.api.logout();
+    await widget.session.clear();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => LoginPage(session: widget.session)),
+      (_) => false,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -56,6 +89,7 @@ class _HomePageState extends State<HomePage> {
             icon: const Icon(Icons.account_circle_outlined),
             onSelected: (v) {
               if (v == 'logout') _logout();
+              if (v == 'switchServer') _switchServer();
             },
             itemBuilder: (_) => [
               PopupMenuItem(
@@ -79,6 +113,16 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
               const PopupMenuDivider(),
+              const PopupMenuItem(
+                value: 'switchServer',
+                child: Row(
+                  children: [
+                    Icon(Icons.dns_outlined, size: 18),
+                    SizedBox(width: 8),
+                    Text('切换服务器'),
+                  ],
+                ),
+              ),
               const PopupMenuItem(
                 value: 'logout',
                 child: Row(

@@ -154,6 +154,26 @@ class PmApi {
     }
   }
 
+  /// 探测服务器是否可达（不需要登录）。
+  ///
+  /// 用 `GET /admin/App/Info` 作为探针：未带 token 时预期得到 401/403，
+  /// 能拿到 HTTP 响应就说明地址、端口、HTTP 服务都通；
+  /// 连不上（SocketException/超时）才会抛 [ApiException]。
+  Future<void> probe() async {
+    final saved = _token;
+    _token = null;
+    try {
+      await _request<dynamic>('GET', '/admin/App/Info');
+    } on ApiException catch (e) {
+      // 任何 HTTP 状态码都说明服务器可达；只有网络层失败才算不可达
+      final msg = e.message;
+      if (msg.startsWith('HTTP ') || msg.contains('尚未安装')) return;
+      rethrow;
+    } finally {
+      _token = saved;
+    }
+  }
+
   // ==================== 终端会话 ====================
 
   /// 会话列表
