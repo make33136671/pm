@@ -1,0 +1,41 @@
+name: pm_mobile
+description: "PM - 项目管理平台移动端（终端 + 文件管理）"
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # HTTP 请求
+  dio: ^5.7.0
+  # 本地持久化（token / 服务器地址）
+  shared_preferences: ^2.3.2
+  # 终端：WebView 内嵌 xterm.js
+  webview_flutter: ^4.10.0
+  # 文件选择（上传）
+  file_picker: ^8.1.4
+  # 保存文件到设备（下载）
+  path_provider: ^2.1.4
+  # 打开外部链接 / 分享文件
+  share_plus: ^10.1.2
+  # 图标
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    # 内嵌的 xterm.js 终端页面（离线可用，不依赖外网 CDN）
+    - js/terminal.html
+    - js/xterm.css
+    - js/xterm.js
+    - js/addon-fit.js

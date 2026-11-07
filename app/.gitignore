@@ -1,0 +1,45 @@
+# Flutter
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.iml
+
+# Android
+android/.gradle/
+android/local.properties
+android/key.properties
+*.jks
+*.keystore
+android/app/debug/
+android/app/profile/
+android/app/release/
+
+# iOS
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 下载的 xterm 原始包（内联后不需要）
+/tmp-xterm/
+
+# ==== 终端资源（构建时生成，不入库）====
+# 模板 js/terminal.template.html 入库；
+# 下面三份是 curl/npm 下载的第三方代码 + 内联产物，由 scripts/fetch_xterm.sh 生成
+js/terminal.html
+js/xterm.js
+js/xterm.css
+js/addon-fit.js

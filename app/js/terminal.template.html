@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>PM Terminal</title>
+<!--
+  PM 移动端终端页面（内嵌 WebView）
+
+  与网页端协议完全一致（见 api/Sb.Apps.Pm.WebApi/WebTerminals/WebTerminalEndpoint.cs）：
+    client → server: Binary 帧 = PTY 输入
+                     Text 帧 {"type":"resize","cols":N,"rows":N}
+                     Text 帧 {"type":"ping","t":<ts>}
+    server → client: Binary 帧 = PTY 输出
+                     Text 帧 {"type":"pong","t":<ts>}
+                     Text 帧 {"type":"exit","code":N}
+
+  与 Flutter 通信：FlutterBridge.postMessage("ready" | "err:<msg>")
+  Flutter 注入：window.__PM_WS_URL__ 后调用 window.pmConnect()
+
+  ⚠️ xterm.js 与 CSS 在构建时被内联进本文件（见 scripts/inline_terminal.py），
+     避免 WebView 从 assets 相对路径加载失败的问题。
+-->
+<style>
+  /* ==== XTERM_CSS_PLACEHOLDER ==== */
+</style>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: #1e1e1e;
+    -webkit-text-size-adjust: 100%;
+  }
+  #term { width: 100%; height: 100%; padding: 4px; box-sizing: border-box; }
+  /* 移动端：软键盘弹出时隐藏自带的输入框样式问题 */
+  .xterm .xterm-helper-textarea { opacity: 0; }
+  #status {
+    position: fixed; right: 6px; bottom: 6px; z-index: 99;
+    font: 10px/1.4 -apple-system, "PingFang SC", monospace;
+    color: #888; background: rgba(0,0,0,.55); padding: 2px 6px;
+    border-radius: 4px; pointer-events: none; transition: opacity .3s;
+  }
+</style>
+</head>
+<body>
+<div id="term"></div>
+<div id="status">连接中…</div>
+
+<script>
+// ==== XTERM_JS_PLACEHOLDER ====
+</script>
+<script>
+// ==== FITADDON_JS_PLACEHOLDER ====
+</script>
+
+<script>
+(function () {
+  'use strict';
+
+  var term = null;
+  var fit = null;
+  var ws = null;
+  var pingTimer = null;
+  var pendingPingAt = 0;
+  var lastRtt = -1;
+  var reconnectTimer = null;
+  var attempt = 0;
+  var closedByUser = false;
+
+  var statusEl = document.getElementById('status');
+
+  function bridge(msg) {
+    try {
+      if (window.FlutterBridge && window.FlutterBridge.postMessage) {
+        window.FlutterBridge.postMessage(msg);
+      }
+    } catch (e) { /* 非 WebView 环境忽略 */ }
+  }
+
+  function setStatus(text, color) {
+    statusEl.textContent = text;
+    statusEl.style.color = color || '#888';
+  }
+
+  function initTerm() {
+    term = new Terminal({
+      cursorBlink: true,
+      fontSize: 13,
+      fontFamily: 'Menlo, Monaco, Consolas, "Courier New", "Noto Sans Mono CJK SC", monospace',
+      scrollback: 5000,
+      allowProposedApi: true,
+      convertEol: false,
+      theme: {
+        background: '#1e1e1e',
+        foreground: '#d4d4d4',
+        cursor: '#d4d4d4',
+        selectionBackground: '#264f78'
+      }
+    });
+
+    fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+    term.open(document.getElementById('term'));
+
+    try { fit.fit(); } catch (e) { /* 未布局完成时忽略 */ }
+
+    // 用户输入 → 服务端（二进制帧，base64 由下面的 b64 函数编码）
+    term.onData(function (data) {
+      sendInput(data);
+    });
+
+    term.writeln('\x1b[90m正在连接 PM 终端…\x1b[0m');
+  }
+
+  // ==== base64 编解码（PTY 输出是任意字节，不能用字符串解码）====
+  function bytesToB64(bytes) {
+    var bin = '';
+    for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  }
+  function b64ToBytes(b64) {
+    var bin = atob(b64);
+    var arr = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return arr;
+  }
+
+  // 服务端 Binary 帧。注意 WebSocket 收到的是 ArrayBuffer，
+  // 而 Termux 类后端可能约定 base64 JSON —— 本后端是纯二进制，直接写。
+  function sendInput(text) {
+    if (!ws || ws.readyState !== 1) return;
+    var bytes = new TextEncoder().encode(text);
+    ws.send(bytes);
+  }
+
+  function sendResize() {
+    if (!ws || ws.readyState !== 1 || !term) return;
+    ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+  }
+
+  function startPing() {
+    stopPing();
+    pingTimer = setInterval(function () {
+      if (ws && ws.readyState === 1) {
+        if (pendingPingAt !== 0) {
+          lastRtt = Date.now() - pendingPingAt;
+          setStatus('延迟 ' + lastRtt + 'ms', lastRtt > 300 ? '#e0a800' : '#3fb950');
+        }
+        pendingPingAt = Date.now();
+        try { ws.send(JSON.stringify({ type: 'ping', t: pendingPingAt })); } catch (e) {}
+      }
+    }, 3000);
+  }
+  function stopPing() {
+    if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+    pendingPingAt = 0;
+  }
+
+  function connect() {
+    var url = window.__PM_WS_URL__;
+    if (!url) { setStatus('未配置连接地址', '#f85149'); bridge('err:未配置 WebSocket 地址'); return; }
+
+    if (ws) {
+      try { ws.onclose = null; ws.close(); } catch (e) {}
+      ws = null;
+    }
+
+    setStatus('连接中…');
+    try {
+      ws = new WebSocket(url);
+    } catch (e) {
+      setStatus('创建连接失败', '#f85149');
+      bridge('err:' + e.message);
+      return;
+    }
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = function () {
+      attempt = 0;
+      setStatus('已连接', '#3fb950');
+      bridge('ready');
+      sendResize();
+      startPing();
+      if (term) term.focus();
+    };
+
+    ws.onmessage = function (ev) {
+      if (ev.data instanceof ArrayBuffer) {
+        // 二进制输出：让 xterm 自己解码（服务端按字节搬运，可能截断多字节字符）
+        term.write(new Uint8Array(ev.data));
+      } else if (typeof ev.data === 'string') {
+        try {
+          var msg = JSON.parse(ev.data);
+          if (msg.type === 'pong') {
+            lastRtt = Date.now() - (msg.t || pendingPingAt || Date.now());
+            pendingPingAt = 0;
+            setStatus('延迟 ' + lastRtt + 'ms', lastRtt > 300 ? '#e0a800' : '#3fb950');
+            return;
+          }
+          if (msg.type === 'exit') {
+            term.writeln('\r\n\x1b[90m[进程已退出 code=' + msg.code + ']\x1b[0m');
+            setStatus('已退出', '#888');
+            return;
+          }
+        } catch (e) {
+          term.write(ev.data);
+        }
+      }
+    };
+
+    ws.onclose = function (ev) {
+      stopPing();
+      if (closedByUser) return;
+      var code = ev.code;
+      // 4001 = 被同账号其他连接顶替（后端 CloseCodes.Replaced），不自动重连
+      if (code === 4001) {
+        setStatus('已在别处打开', '#e0a800');
+        term.writeln('\r\n\x1b[33m[该会话已在其他设备打开，本连接已断开]\x1b[0m');
+        return;
+      }
+      if (code === 1000 || code === 1001) {
+        setStatus('已关闭', '#888');
+        return;
+      }
+      // 异常断开 → 指数退避重连（与网页端策略一致）
+      if (attempt >= 8) {
+        setStatus('重连失败', '#f85149');
+        term.writeln('\r\n\x1b[31m[连接断开，重连 8 次均失败]\x1b[0m');
+        bridge('err:连接断开且重连失败');
+        return;
+      }
+      attempt++;
+      var delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
+      setStatus('断线重连中(' + attempt + ')…', '#e0a800');
+      reconnectTimer = setTimeout(connect, delay);
+    };
+
+    ws.onerror = function () {
+      setStatus('连接错误', '#f85149');
+    };
+  }
+
+  // 供 Flutter 调用
+  window.pmConnect = function () { closedByUser = false; attempt = 0; connect(); };
+  window.pmPaste = function (text) {
+    if (!ws || ws.readyState !== 1) return;
+    sendInput(text);
+  };
+
+  // 窗口尺寸变化（软键盘弹出/旋转）→ 重新 fit 并通知后端 resize
+  var resizeTimer = null;
+  window.addEventListener('resize', function () {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () {
+      try { if (fit) fit.fit(); } catch (e) {}
+      sendResize();
+    }, 150);
+  });
+
+  window.addEventListener('beforeunload', function () {
+    closedByUser = true;
+    if (ws) { try { ws.close(); } catch (e) {} }
+  });
+
+  // 初始化
+  initTerm();
+  // 页面加载完会由 Flutter 注入 __PM_WS_URL__ 并调用 pmConnect，
+  // 但为保险起见，若已注入则立即连
+  if (window.__PM_WS_URL__) connect();
+})();
+</script>
+</body>
+</html>
