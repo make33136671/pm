@@ -48,6 +48,16 @@ export async function deleteSession(id: number) {
   return api.post('/CliSession/Del', { id });
 }
 
+/** 彻底删除（物理删除，连同日志文件，不可恢复）。运行中的会话会被后端拒绝 */
+export async function purgeSession(id: number) {
+  return api.post('/CliSession/Purge', { id });
+}
+
+/** 清空所有已结束会话的历史（运行中的不受影响） */
+export async function purgeAllSessions() {
+  return api.post('/CliSession/Purge', { all: true });
+}
+
 /**
  * 下载会话日志文件。带 JWT 鉴权走 blob —— 不能用 <a href>:
  * 相对路径会被前端 SPA 路由吞掉跳到兜底页,且 <a> 跳转不带 token 必 401。

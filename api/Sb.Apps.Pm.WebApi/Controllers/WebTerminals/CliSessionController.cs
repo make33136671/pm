@@ -33,6 +33,14 @@ namespace Sb.Apps.Pm.WebApi.Controllers.WebTerminals
         [HttpPost]
         public Result ClearLog([FromForm] int id) => _service.ClearLog(id);
 
+        /// <summary>
+        /// 彻底删除（物理删除，不可恢复）。运行中的会话会被跳过。
+        /// 传 id 删单条已结束会话；传 all=true 清空所有已结束会话的历史。
+        /// </summary>
+        [HttpPost]
+        public Result Purge([FromForm] int? id, [FromForm] bool all = false)
+            => _service.Purge(id, all);
+
         [HttpPost]
         public Result Del([FromForm] int id) => _service.Del(id);
 

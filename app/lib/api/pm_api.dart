@@ -143,6 +143,41 @@ class PmApi {
     _token = null;
   }
 
+  /// 修改密码。后端会校验旧密码，错误时抛 [ApiException]。
+  Future<void> changePassword(String oldPassword, String newPassword) {
+    return _request<void>(
+      'POST',
+      '/admin/Auth/ChangePassword',
+      form: {'oldPassword': oldPassword, 'newPassword': newPassword},
+      parser: (_) {},
+    );
+  }
+
+  /// 修改头像。[avatar] 传完整 URL 或 `/storage/...` 相对路径。
+  ///
+  /// 返回更新后的完整用户信息（含最新 avatar）。
+  Future<UserInfo> changeAvatar(String avatar) {
+    return _request<UserInfo>(
+      'POST',
+      '/admin/Auth/ChangeAvatar',
+      form: {'avatar': avatar},
+      parser: (d) => UserInfo.fromJson((d as Map).cast<String, dynamic>()),
+    );
+  }
+
+  /// 修改昵称/名称
+  Future<UserInfo> updateProfile({
+    required String name,
+    required String nickname,
+  }) {
+    return _request<UserInfo>(
+      'POST',
+      '/admin/Auth/UpdateProfile',
+      form: {'name': name, 'nickname': nickname},
+      parser: (d) => UserInfo.fromJson((d as Map).cast<String, dynamic>()),
+    );
+  }
+
   /// 校验 token 是否仍有效
   Future<bool> verifyToken() async {
     if (!loggedIn) return false;
@@ -222,6 +257,22 @@ class PmApi {
 
   Future<void> deleteSession(int id) =>
       _request('POST', '/admin/CliSession/Del', form: {'id': id});
+
+  /// 彻底删除单条已结束会话（物理删除，连同日志文件，不可恢复）。
+  ///
+  /// 运行中的会话后端会拒绝，需先 [destroySession]。
+  Future<void> purgeSession(int id) => _request(
+        'POST',
+        '/admin/CliSession/Purge',
+        form: {'id': id},
+      );
+
+  /// 清空所有**已结束**会话的历史（运行中的不受影响）。
+  Future<void> purgeAllSessions() => _request(
+        'POST',
+        '/admin/CliSession/Purge',
+        form: {'all': 'true'},
+      );
 
   /// WebSocket 终端地址（token 走 query，因为 WS 不便自定义 header）
   String webtermSocketUrl(int sessionId) {

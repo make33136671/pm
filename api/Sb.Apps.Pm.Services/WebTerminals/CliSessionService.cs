@@ -204,4 +204,104 @@ public class CliSessionService : BaseCrudService<CliSession>
 
         return base.Del(id);
     }
+
+    /// <summary>
+    /// 彻底删除（物理删除，不可恢复）。
+    ///
+    /// 与 <see cref="Del"/> 的区别：CliSession 实现了 ISoftDelete，Del 只把
+    /// IsDeleted 置 true，记录仍留在表里。这里绕开软删除直接物理删除，
+    /// 并清掉对应的日志文件与空目录。
+    ///
+    /// 规则：**运行中的会话不会被删除**（需要先结束），避免误删正在用的。
+    /// </summary>
+    /// <param name="id">指定会话；为 null 且 purgeAll=true 时删除全部已结束会话</param>
+    /// <param name="purgeAll">清空所有已结束会话的历史</param>
+    public Result Purge(int? id, bool purgeAll = false)
+    {
+        // ⚠️ 软删除的坑：
+        // CliSession 实现 ISoftDelete，框架把 IsDeleted=false 做成了**全局过滤**，
+        // 连 _fsql.Select<T>() 也会自动带上，所以被软删除的记录查不出、删不掉
+        // ——那正是「历史残留占库」的根源。
+        // 这里直接用原生 SQL（_fsql.Ado）绕开过滤器。
+        List<CliSession> targets;
+
+        if (purgeAll)
+        {
+            targets = _fsql.Ado.Query<CliSession>(
+                "SELECT * FROM sb_pm_webterm_session").ToList();
+        }
+        else if (id != null)
+        {
+            var s = _fsql.Ado.Query<CliSession>(
+                "SELECT * FROM sb_pm_webterm_session WHERE \"Id\" = @id",
+                new { id = id.Value }).FirstOrDefault();
+            if (s == null) return Result.Fail("会话不存在");
+            targets = [s];
+        }
+        else
+        {
+            return Result.Fail("缺少参数");
+        }
+
+        // 只保护「PTY 进程真的还活着」的会话；
+        // 不用数据库 Status 字段判断——pm 重启后该字段可能是残留的 Running。
+        var protectedCount = targets.Count(t => _pty.IsAlive(t.Id));
+        targets = targets.Where(t => !_pty.IsAlive(t.Id)).ToList();
+
+        if (targets.Count == 0) return Result.Success("没有可清除的历史会话", 0);
+
+        var deletedLogs = 0;
+        var ids = new List<int>(targets.Count);
+
+        foreach (var s in targets)
+        {
+            ids.Add(s.Id);
+            var abs = _pty.GetLogFileAbsPath(s.LogFilePath);
+            if (abs != null && File.Exists(abs))
+            {
+                try { File.Delete(abs); deletedLogs++; } catch { }
+            }
+        }
+
+        // 物理删除：原生 SQL，绕过软删除全局过滤（Delete<T> 同样会被拦截）
+        var removed = 0;
+        if (ids.Count > 0)
+        {
+            removed = _fsql.Ado.ExecuteNonQuery(
+                $"DELETE FROM sb_pm_webterm_session WHERE \"Id\" IN ({string.Join(",", ids)})");
+        }
+
+        CleanupEmptyLogDirs();
+
+        _logger.LogInformation(
+            "[webterm] 彻底删除会话 {Count} 条, 日志 {Logs} 个, 跳过运行中 {Skip} 个, purgeAll={All}",
+            removed, deletedLogs, protectedCount, purgeAll);
+
+        var msg = $"已彻底删除 {removed} 条会话记录（含 {deletedLogs} 个日志文件）";
+        if (protectedCount > 0) msg += $"，跳过 {protectedCount} 个运行中的会话";
+        return Result.Success(msg, removed);
+    }
+
+    /// <summary>清理 logs/cli/YYYYMM/ 下变空的月份目录</summary>
+    private void CleanupEmptyLogDirs()
+    {
+        try
+        {
+            var root = _pty.LogRoot;
+            if (string.IsNullOrEmpty(root) || !Directory.Exists(root)) return;
+            foreach (var dir in Directory.GetDirectories(root))
+            {
+                try
+                {
+                    if (Directory.GetFiles(dir).Length == 0 &&
+                        Directory.GetDirectories(dir).Length == 0)
+                    {
+                        Directory.Delete(dir);
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
+    }
 }

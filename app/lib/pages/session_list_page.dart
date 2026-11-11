@@ -108,11 +108,40 @@ class _SessionListPageState extends State<SessionListPage> {
     }
   }
 
-  Future<void> _delete(CliSession s) async {
-    final ok = await _confirm('删除记录', '只会删除这条会话记录，不影响已结束的进程。继续？');
+  /// 彻底删除单条（物理删除，不可恢复）
+  Future<void> _purgeOne(CliSession s) async {
+    final ok = await _confirmDanger(
+      '彻底删除会话',
+      '将永久删除「${s.name}」的记录和日志文件。\n\n'
+          '此操作不可恢复！',
+    );
     if (!ok) return;
     try {
-      await widget.session.api.deleteSession(s.id);
+      await widget.session.api.purgeSession(s.id);
+      _toast('已彻底删除');
+      await _load();
+    } on ApiException catch (e) {
+      _toast(e.message);
+    }
+  }
+
+  /// 清空所有已结束会话的历史（运行中的不受影响）
+  Future<void> _purgeAll() async {
+    final finished = _sessions.where((s) => !s.running).length;
+    if (finished == 0) {
+      _toast('没有可清除的历史会话');
+      return;
+    }
+    final ok = await _confirmDanger(
+      '清空历史',
+      '将永久删除所有已结束的 $finished 个会话及其日志文件。\n'
+          '运行中的会话不受影响。\n\n'
+          '此操作不可恢复！',
+    );
+    if (!ok) return;
+    try {
+      await widget.session.api.purgeAllSessions();
+      _toast('历史已清空');
       await _load();
     } on ApiException catch (e) {
       _toast(e.message);
@@ -136,6 +165,33 @@ class _SessionListPageState extends State<SessionListPage> {
           ),
         ],
       ),
+    );
+    return r ?? false;
+  }
+
+  /// 危险操作确认：红色按钮 + 警示图标，默认焦点在「取消」
+  Future<bool> _confirmDanger(String title, String content) async {
+    final r = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        final cs = Theme.of(ctx).colorScheme;
+        return AlertDialog(
+          icon: Icon(Icons.warning_amber_rounded, color: cs.error, size: 28),
+          title: Text(title),
+          content: Text(content),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: cs.error),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('确认删除'),
+            ),
+          ],
+        );
+      },
     );
     return r ?? false;
   }
@@ -169,96 +225,183 @@ class _SessionListPageState extends State<SessionListPage> {
       );
     }
 
-    return Stack(
-      children: [
-        RefreshIndicator(
-          onRefresh: _load,
-          child: _sessions.isEmpty
-          ? ListView(
-              children: [
-                const SizedBox(height: 120),
-                Icon(Icons.terminal_outlined,
-                    size: 64,
-                    color: Theme.of(context).colorScheme.outlineVariant),
-                const SizedBox(height: 12),
-                const Center(child: Text('还没有终端会话')),
-                const SizedBox(height: 8),
-                Center(
-                  child: Text(
-                    '点右下角 + 新建一个',
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          // 列表最顶部固定入口：新建会话（替代原右下角悬浮按钮）
+          _buildCreateTile(context),
+          const Divider(height: 1),
+          _buildClearHistoryBar(context),
+          if (_sessions.isEmpty)
+            ..._buildEmptyState(context)
+          else
+            ..._buildSessionTiles(context),
+        ],
+      ),
+    );
+  }
+
+  /// 顶部「新建终端会话」入口
+  Widget _buildCreateTile(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: _createSession,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: cs.primaryContainer,
+                borderRadius: BorderRadius.circular(3),
+              ),
+              child: Icon(Icons.add, color: cs.onPrimaryContainer, size: 22),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '新建终端会话',
                     style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant),
-                  ),
-                ),
-              ],
-            )
-          : ListView.separated(
-              itemCount: _sessions.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
-              itemBuilder: (ctx, i) {
-                final s = _sessions[i];
-                return ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: s.running
-                        ? Colors.green.withValues(alpha: 0.15)
-                        : Theme.of(ctx).colorScheme.surfaceContainerHighest,
-                    child: Icon(
-                      Icons.terminal,
-                      size: 20,
-                      color: s.running
-                          ? Colors.green
-                          : Theme.of(ctx).colorScheme.outline,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: cs.primary,
                     ),
                   ),
-                  title: Text(
-                    s.name.isEmpty ? '会话 #${s.id}' : s.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  const SizedBox(height: 2),
+                  Text(
+                    '在服务器上开一个 shell',
+                    style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
                   ),
-                  subtitle: Text(
-                    '${s.running ? "运行中" : "已结束"} · ${s.cwd ?? "-"}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                  onTap: s.running
-                      ? () => _openTerminal(s.id)
-                      : () => _toast('会话已结束，请新建一个'),
-                  trailing: PopupMenuButton<String>(
-                    onSelected: (v) {
-                      if (v == 'destroy') _destroy(s);
-                      if (v == 'delete') _delete(s);
-                    },
-                    itemBuilder: (_) => [
-                      if (s.running)
-                        const PopupMenuItem(
-                          value: 'destroy',
-                          child: Row(children: [
-                            Icon(Icons.stop_circle_outlined, size: 18),
-                            SizedBox(width: 8),
-                            Text('结束会话'),
-                          ]),
-                        ),
-                      const PopupMenuItem(
-                        value: 'delete',
-                        child: Row(children: [
-                          Icon(Icons.delete_outline, size: 18),
-                          SizedBox(width: 8),
-                          Text('删除记录'),
-                        ]),
-                      ),
-                    ],
-                  ),
-                );
-              },
+                ],
+              ),
             ),
+            Icon(Icons.chevron_right, size: 20, color: cs.outline),
+          ],
         ),
-        FloatingActionButton(
-          onPressed: _createSession,
-          tooltip: '新建会话',
-          child: const Icon(Icons.add),
-        ),
-      ],
+      ),
     );
+  }
+
+  /// 顶部「清空历史」入口（位于新建行下方，仅在存在已结束会话时显示）
+  Widget _buildClearHistoryBar(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final finished = _sessions.where((s) => !s.running).length;
+    if (finished == 0) return const SizedBox.shrink();
+    return InkWell(
+      onTap: _purgeAll,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(
+          children: [
+            Icon(Icons.delete_sweep_outlined, size: 18, color: cs.error),
+            const SizedBox(width: 8),
+            Text(
+              '清空历史（$finished）',
+              style: TextStyle(fontSize: 13, color: cs.error),
+            ),
+            const Spacer(),
+            Text(
+              '不含运行中',
+              style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 空状态
+  List<Widget> _buildEmptyState(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return [
+      const SizedBox(height: 100),
+      Icon(Icons.terminal_outlined, size: 64, color: cs.outlineVariant),
+      const SizedBox(height: 12),
+      const Center(child: Text('还没有终端会话')),
+      const SizedBox(height: 8),
+      Center(
+        child: Text(
+          '点上方「新建终端会话」开一个',
+          style: TextStyle(color: cs.onSurfaceVariant),
+        ),
+      ),
+      const SizedBox(height: 100),
+    ];
+  }
+
+  /// 会话列表项
+  List<Widget> _buildSessionTiles(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tiles = <Widget>[];
+    for (var i = 0; i < _sessions.length; i++) {
+      final s = _sessions[i];
+      if (i > 0) tiles.add(const Divider(height: 1));
+      tiles.add(
+        ListTile(
+          leading: CircleAvatar(
+            backgroundColor: s.running
+                ? Colors.green.withValues(alpha: 0.15)
+                : cs.surfaceContainerHighest,
+            child: Icon(
+              Icons.terminal,
+              size: 20,
+              color: s.running ? Colors.green : cs.outline,
+            ),
+          ),
+          title: Text(
+            s.name.isEmpty ? '会话 #${s.id}' : s.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: Text(
+            '${s.running ? "运行中" : "已结束"} · ${s.cwd ?? "-"}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12),
+          ),
+          onTap: s.running
+              ? () => _openTerminal(s.id)
+              : () => _toast('会话已结束，请新建一个'),
+          trailing: PopupMenuButton<String>(
+            onSelected: (v) {
+              if (v == 'destroy') _destroy(s);
+              if (v == 'purge') _purgeOne(s);
+            },
+            itemBuilder: (ctx) => [
+              if (s.running)
+                const PopupMenuItem(
+                  value: 'destroy',
+                  child: Row(children: [
+                    Icon(Icons.stop_circle_outlined, size: 18),
+                    SizedBox(width: 8),
+                    Text('结束会话'),
+                  ]),
+                ),
+              PopupMenuItem(
+                value: 'purge',
+                child: Row(children: [
+                  Icon(Icons.delete_forever,
+                      size: 18, color: Theme.of(ctx).colorScheme.error),
+                  const SizedBox(width: 8),
+                  Text(
+                    '彻底删除',
+                    style: TextStyle(color: Theme.of(ctx).colorScheme.error),
+                  ),
+                ]),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    return tiles;
   }
 }

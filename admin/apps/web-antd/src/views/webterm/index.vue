@@ -26,11 +26,12 @@ import { directUploadApi } from '#/api/core/upload';
 import {
   clearSessionLog,
   createSession,
-  deleteSession,
   destroySession,
   downloadSessionLog,
   getProjectTree,
   getSessionList,
+  purgeAllSessions,
+  purgeSession,
 } from './api';
 import Terminal from './components/Terminal.vue';
 
@@ -317,10 +318,28 @@ async function onClearLog(id: number) {
   await loadList();
 }
 
-async function onDelete(id: number) {
-  await deleteSession(id);
-  if (currentId.value === id) currentId.value = null;
-  await loadList();
+// ---- 彻底删除（物理删除，不可恢复）----
+async function onPurge(id: number) {
+  try {
+    await purgeSession(id);
+    message.success('已彻底删除');
+    if (currentId.value === id) currentId.value = null;
+    await loadList();
+  } catch {
+    // sbRequestClient 自动提示后端返回的错误(如「会话仍在运行」)
+  }
+}
+
+// ---- 清空所有已结束会话的历史 ----
+async function onPurgeAll() {
+  try {
+    const res = await purgeAllSessions();
+    message.success(res?.message || '历史已清空');
+    currentId.value = null;
+    await loadList();
+  } catch {
+    // 错误已由请求层提示
+  }
 }
 
 async function onDownloadLog(id: number) {
@@ -440,6 +459,22 @@ onBeforeUnmount(() => {
             <span class="webterm-archive-caret">{{ archiveOpen ? '▼' : '▶' }}</span>
             <span class="webterm-archive-title">已结束</span>
             <span class="webterm-archive-count">({{ archivedSessions.length }})</span>
+            <Popconfirm
+              v-if="archivedSessions.length > 0"
+              title="清空全部历史会话?将物理删除所有已结束会话记录与日志文件,运行中的会话不受影响,不可恢复!"
+              ok-text="确认清空"
+              ok-type="danger"
+              @confirm="onPurgeAll"
+            >
+              <Button
+                type="link"
+                size="small"
+                danger
+                @click.stop
+              >
+                清空历史
+              </Button>
+            </Popconfirm>
           </div>
           <div v-if="archiveOpen" class="webterm-archive-list">
             <div
@@ -527,10 +562,12 @@ onBeforeUnmount(() => {
               下载日志
             </Button>
             <Popconfirm
-              title="删除会话记录?(同时删日志文件,不可恢复)"
-              @confirm="onDelete(currentSession.id)"
+              title="彻底删除这条会话记录?将物理删除数据库记录并删除日志文件,不可恢复!"
+              ok-text="彻底删除"
+              ok-type="danger"
+              @confirm="onPurge(currentSession.id)"
             >
-              <Button danger>删除</Button>
+              <Button danger>彻底删除</Button>
             </Popconfirm>
           </div>
         </div>

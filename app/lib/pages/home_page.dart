@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../session.dart';
 import 'file_manager_page.dart';
-import 'session_list_page.dart';
 import 'login_page.dart';
+import 'profile_page.dart';
+import 'session_list_page.dart';
 
 /// 主页：底部两个 Tab —— 终端 / 文件
 class HomePage extends StatefulWidget {
@@ -43,6 +44,15 @@ class _HomePageState extends State<HomePage> {
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => LoginPage(session: widget.session)),
       (_) => false,
+    );
+  }
+
+  /// 打开个人中心（头像 / 改密码 / 退出）
+  void _openProfile() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ProfilePage(session: widget.session),
+      ),
     );
   }
 
@@ -88,31 +98,53 @@ class _HomePageState extends State<HomePage> {
           PopupMenuButton<String>(
             icon: const Icon(Icons.account_circle_outlined),
             onSelected: (v) {
+              if (v == 'profile') _openProfile();
               if (v == 'logout') _logout();
               if (v == 'switchServer') _switchServer();
             },
             itemBuilder: (_) => [
               PopupMenuItem(
                 enabled: false,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
+                child: Row(
                   children: [
-                    Text(
-                      widget.session.displayName.isEmpty
-                          ? widget.session.username
-                          : widget.session.displayName,
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      widget.session.baseUrl,
-                      style: Theme.of(context).textTheme.bodySmall,
+                    _MenuAvatar(session: widget.session),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            widget.session.displayName.isEmpty
+                                ? widget.session.username
+                                : widget.session.displayName,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            widget.session.baseUrl,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
               ),
               const PopupMenuDivider(),
+              const PopupMenuItem(
+                value: 'profile',
+                child: Row(
+                  children: [
+                    Icon(Icons.person_outline, size: 18),
+                    SizedBox(width: 8),
+                    Text('个人中心'),
+                  ],
+                ),
+              ),
               const PopupMenuItem(
                 value: 'switchServer',
                 child: Row(
@@ -161,6 +193,54 @@ class _HomePageState extends State<HomePage> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// 账号菜单里的圆形头像（无图时显示名字首字）
+class _MenuAvatar extends StatelessWidget {
+  final Session session;
+  const _MenuAvatar({required this.session});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final url = session.avatarUrl;
+    return Container(
+      width: 34,
+      height: 34,
+      decoration: BoxDecoration(
+        color: cs.primaryContainer,
+        shape: BoxShape.circle,
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: url.isEmpty
+          ? Center(
+              child: Text(
+                session.avatarInitial,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: cs.onPrimaryContainer,
+                ),
+              ),
+            )
+          : Image.network(
+              url,
+              width: 34,
+              height: 34,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => Center(
+                child: Text(
+                  session.avatarInitial,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: cs.onPrimaryContainer,
+                  ),
+                ),
+              ),
+            ),
     );
   }
 }
