@@ -14,8 +14,8 @@ dependencies:
   dio: ^5.7.0
   # 本地持久化（token / 服务器地址）
   shared_preferences: ^2.3.2
-  # 终端：WebView 内嵌 xterm.js
-  webview_flutter: ^4.10.0
+  # 终端：原生 xterm 渲染（纯 Dart 实现 VT100/xterm 序列，不依赖 WebView）
+  xterm: ^4.0.0
   # 文件选择（上传）
   file_picker: ^8.1.4
   # 保存文件到设备（下载）
@@ -32,10 +32,3 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-
-  assets:
-    # 内嵌的 xterm.js 终端页面（离线可用，不依赖外网 CDN）
-    - js/terminal.html
-    - js/xterm.css
-    - js/xterm.js
-    - js/addon-fit.js

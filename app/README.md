@@ -1,7 +1,7 @@
 # PM 移动端（Android / iOS）
 
 > PM 项目管理平台的手机 App。第一版只做两个模块：**终端** + **文件管理**。
-> 技术栈：Flutter（一套代码同时出安卓和 iOS）+ WebView 内嵌 xterm.js 终端。
+> 技术栈：Flutter（一套代码同时出安卓和 iOS）+ **原生 xterm 终端渲染**（不再使用 WebView）。
 
 ---
 
@@ -11,7 +11,7 @@
 |---|---|
 | **登录** | 填服务器地址 + 账号密码，**测试连接**、**常用地址一键填入**、地址格式校验，token 持久化，启动自动恢复登录态 |
 | **切换服务器** | 右上角账号菜单 →「切换服务器」，退出后回到登录页改地址（退出登录会保留上次地址） |
-| **终端** | 会话列表、新建会话、打开终端（WebView + xterm.js）、结束/删除会话 |
+| **终端** | 会话列表、新建会话、原生终端（xterm 渲染）、结束/删除会话、断开自动重连 |
 | **文件管理** | 目录浏览、面包屑导航、文本编辑保存、新建文件/目录、重命名、删除、上传、下载 |
 
 暂不包含：项目管理、需求、任务、文档、AI、Pipeline 等（后续迭代）。
@@ -20,48 +20,37 @@
 
 ## 二、为什么这样设计
 
-### 终端用 WebView + xterm.js，不自己实现原生终端
+### 终端用原生 xterm 渲染（2026-11 起）
+
+早期版本用 WebView 内嵌 xterm.js，后来改为纯 Dart 的
+[xterm](https://pub.dev/packages/xterm) 包原生渲染：
 
 | 方案 | 取舍 |
 |---|---|
-| **WebView + xterm.js**（已选） | xterm.js 已完成 VT100/xterm 序列解析（颜色、光标、宽字符、鼠标），与网页端共用同一套后端协议 `/webterm/ws/{id}`，**后端零改动** |
-| 原生自研 VT100 | 需要实现完整的 ANSI 转义序列解析、渲染、输入法处理，工作量大数倍且兼容性难保证 |
+| **原生 xterm**（当前） | 首帧快、内存低、软键盘与滚动手感原生；主题/字体/选中复制可与 App 统一；不受 WebView 内核版本影响 |
+| WebView + xterm.js（已弃用） | 需要把 JS/CSS 内联进 HTML 才能离线跑，`loadHtmlString` 的 origin 是 `about:blank`，资源无法走相对路径；首帧慢、内存高 |
 
-代价：终端是 WebView，首次加载比原生略慢（本地方案已内联资源，无网络请求）。
+两者**共用同一套后端协议** `/webterm/ws/{id}?token=`，后端零改动。
 
-### xterm.js 资源必须内联进 HTML
+> 切换代价：xterm 包为 2024 年的版本，若未来 Flutter 大版本升级需重新验证兼容性。
 
-WebView 用 `loadHtmlString` 加载页面时 origin 是 `about:blank`，
-**无法用相对路径访问 Flutter assets 里的 js/css**。
+### 终端二进制帧必须按字节搬运
 
-所以构建前要把 xterm.js 内联进 `js/terminal.html`（脚本：`scripts/fetch_xterm.sh` + `scripts/inline_terminal.js`）。
-
-> ⚠️ `js/terminal.html`、`xterm.js`、`xterm.css`、`addon-fit.js` **都是 .gitignore 里的生成物，不入库**。
-> 新克隆的仓库里 `js/` 只有模板 `terminal.template.html`，**必须先生成再构建**，
-> 否则 `flutter pub get` 会报 asset 缺失。
->
-> **Windows 上没有 bash，`fetch_xterm.sh` 跑不了**，用 PowerShell 等价步骤（见 `docs/BUILD.md` 第九节）。
+PTY 输出是**任意字节序列**，可能截断在多字节 UTF-8 字符中间。
+`terminal_page.dart` 收到 Binary 帧后用 `utf8.decode(..., allowMalformed: true)`
+兜底 —— 不要先 `latin1` 或强转，否则会出现 `�` 且拼不回来。
 
 ---
 
 ## 三、快速开始
 
-### 1. 准备终端资源（只需一次）
-
-```bash
-cd app
-bash scripts/fetch_xterm.sh
-```
-
-这会下载 xterm.js 并内联进 `js/terminal.html`，使其成为自包含文件。
-
-### 2. 安装依赖
+### 1. 安装依赖
 
 ```bash
 flutter pub get
 ```
 
-### 3. 运行
+### 2. 运行
 
 ```bash
 # 连真机/模拟器
@@ -71,6 +60,9 @@ flutter run
 flutter build apk --release
 # 产物：build/app/outputs/flutter-apk/app-release.apk
 ```
+
+> 终端已改为原生渲染，**不再需要下载/内联 xterm.js**。旧的 `js/` 与
+> `scripts/fetch_xterm.sh` 已随 2026-11 改造移除。
 
 ### 4. 使用
 
@@ -148,15 +140,10 @@ app/
 │   │   ├── login_page.dart        登录
 │   │   ├── home_page.dart         底部导航容器（终端 / 文件）
 │   │   ├── session_list_page.dart 终端会话列表
-│   │   ├── terminal_page.dart     WebView 终端
+│   │   ├── terminal_page.dart     原生终端（xterm 渲染 + WebSocket）
 │   │   ├── file_manager_page.dart 文件浏览
 │   │   └── file_edit_page.dart    文件编辑
 │   └── theme/app_theme.dart       主题（Material 3，明暗两套）
-├── js/
-│   └── terminal.html              终端页面（构建后内联 xterm.js）
-├── scripts/
-│   ├── fetch_xterm.sh             下载 xterm.js + 内联
-│   └── inline_terminal.js         内联脚本
 ├── test/
 │   └── login_page_test.dart       登录页 widget 测试（含服务器地址输入）
 └── android/                       Android 平台配置
@@ -176,16 +163,27 @@ app/
 ### 6.2 终端二进制帧
 
 PTY 输出是**任意字节序列**，可能截断在多字节 UTF-8 字符中间。
-所以全程用 `Uint8Array` 搬运，交给 xterm 自己解码 —— 不要先转字符串，否则会出现 `�` 且拼不回来。
+原生实现里用 `utf8.decode(bytes, allowMalformed: true)` 兜底，
+不要把 Binary 帧强转成 String —— 否则会出现 `�` 且拼不回来。
 
 ### 6.3 软键盘与尺寸
 
-- `windowSoftInputMode="adjustResize"`：软键盘弹出时 WebView 收缩而不是遮挡
-- JS 侧监听 `resize` 事件 → `fit.fit()` 重算行列 → 通知后端 `resize`
+- `windowSoftInputMode="adjustResize"`：软键盘弹出时界面收缩而不是遮挡
+- `Terminal.onResize` 回调 → 发送 `{"type":"resize"}` 通知后端 PTY
 
 ### 6.4 Tab 切换不断连
 
-`HomePage` 用 `IndexedStack` 而非重建，切 Tab 时终端 WebView 保持存活，连接不受影响。
+`HomePage` 用 `IndexedStack` 而非重建，切 Tab 时终端页保持存活，WebSocket 连接不受影响。
+
+### 6.5 断线重连
+
+| 关闭码 | 含义 | 行为 |
+|---|---|---|
+| 1000 / 1001 | 正常关闭 | 不重连，提示已关闭 |
+| **4001** | 被同账号其他设备顶替 | 不重连（避免两端互顶） |
+| 其他 | 异常断开 | 指数退避 1s→2s→4s→8s→10s，最多 8 次 |
+
+另加 30s 应用层 ping 心跳，防止反向代理掐掉空闲连接。
 
 ### 6.5 文件保存并发保护
 
@@ -200,13 +198,13 @@ App 保存成功后立即重读一次刷新 hash，避免下次保存被误拦�
 |---|---|
 | Flutter | 3.24+（Dart 3.5+） |
 | JDK | 17 |
-| Android SDK | compileSdk 35 / build-tools 35.x |
-| Node.js | 仅用于 `fetch_xterm.sh` 下载 xterm.js（可选，也走 curl） |
+| Android SDK | compileSdk 36 / build-tools 36.0.0 |
+| Gradle / AGP / Kotlin | ≥ 8.14.0 / ≥ 8.11.1 / ≥ 2.2.20（Flutter 3.47 硬性要求） |
 
 ### 目前环境状态
 
-**本机（110 container）没有 Flutter / JDK / Android SDK**，
-所以代码写完但**尚未构建出 APK**。构建方式见 `docs/BUILD.md`。
+构建在 **Win11 工作站**（`192.168.2.100`）上完成，流程见 `docs/BUILD.md` 第九节。
+本机（110 container）没有 Flutter / JDK / Android SDK。
 
 ---
 
@@ -216,8 +214,8 @@ App 保存成功后立即重读一次刷新 hash，避免下次保存被误拦�
 
 - [x] 首版 APK 构建（2026-11-07 在 Win11 出包，流程见 `docs/BUILD.md` 第九节）
 - [x] 登录页服务器地址强化 + 切换服务器（2026-11-08）
+- [x] **终端改用原生 xterm 渲染**，移除 WebView 与 js/ 内联产物（2026-11-11）
 - [ ] **真机验证**（下次推进，清单见归档文档第七节）
-- [ ] **修复终端 WebSocket 输入不回显**（已知缺陷，见归档文档第六节）
 - [ ] 终端手势：双指缩放字号、长按选择复制
 - [ ] 文件管理：回收站查看与恢复、压缩解压
 - [ ] 生物识别解锁（指纹/面容）替代每次输入密码

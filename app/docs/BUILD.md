@@ -1,35 +1,23 @@
 # PM 移动端构建指南
 
 > 本文说明如何把 `app/` 目录的 Flutter 工程构建成 APK。
-> 当前开发环境（110 容器 / 宿主机）**没有 Flutter / JDK / Android SDK**，
-> 所以代码就绪但尚未出包，需按本文任选一种方式构建。
+> 实测可行的构建机是 **Win11 工作站（192.168.2.100）**，完整流程见第九节。
+> 110 容器本身没有 Flutter / JDK / Android SDK。
 
 ---
 
-## 一、构建前必做（一次）
+## 一、构建前必做
 
-### 1. 内联 xterm.js
-
-终端页面依赖 xterm.js，必须内联进 HTML 才能在 WebView 里离线运行。
+### 1. 拉依赖
 
 ```bash
 cd app
-bash scripts/fetch_xterm.sh
+flutter pub get
 ```
 
-成功输出：
-
-```
-=== 下载 @xterm/xterm@5.5.0 ===
-=== 下载 @xterm/addon-fit@0.10.0 ===
-  内联 xterm.css (5 KB)
-  内联 xterm.js (282 KB)
-  内联 addon-fit.js (1 KB)
-完成：js/terminal.html (297 KB)
-```
-
-> 已验证：xterm 5.5.0 可从 npmmirror 下载。
-> 若 `terminal.html` 已被内联过，脚本会提示跳过 —— 重复运行不会膨胀文件。
+> **2026-11 起终端已改为原生 xterm 渲染**，不再需要下载或内联 `xterm.js`。
+> 旧的 `js/` 目录、`scripts/fetch_xterm.sh`、`scripts/inline_terminal.js`
+> 均已移除，请勿再执行对应步骤。
 
 ---
 
@@ -186,11 +174,13 @@ repositories {
 }
 ```
 
-### 终端页面白屏
+### 终端页面白屏 / 无输出
 
-1. 确认跑过 `bash scripts/fetch_xterm.sh`（`js/terminal.html` 应约 297KB）
-2. 若只有几十 KB，说明还是模板没内联
-3. 用 Chrome 打开 `chrome://inspect` 调试 WebView 看 console
+终端已改为原生 xterm 渲染，**不再是 WebView**，排查方向也变了：
+
+1. 确认 `flutter pub get` 里包含 `xterm` 依赖（不再是 `webview_flutter`）
+2. 看 App 内终端顶部的错误条，断线会显示重连次数与关闭码
+3. 连不上就先用登录页的「测试连接」确认服务器可达
 
 ### 连接不上服务器
 
@@ -241,7 +231,7 @@ flutter doctor --android-licenses     # 全部输入 y
 
 `flutter doctor` 应达到：Android toolchain `[√]`。
 
-### 9.2 三个必踩的坑
+### 9.2 必踩的坑
 
 **坑 1：`maven.google.com` 不通**
 
@@ -255,41 +245,7 @@ maven { url = uri("https://maven.aliyun.com/repository/public") }
 maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
 ```
 
-**坑 2：`js/` 下只有模板，没有产物**
-
-`terminal.html` / `xterm.js` / `xterm.css` / `addon-fit.js` **都在 .gitignore 里**，
-新克隆的仓库没有它们，`flutter pub get` 会因 asset 缺失而失败。
-`fetch_xterm.sh` 是 bash 脚本、Windows 跑不了，用 PowerShell 等价：
-
-```powershell
-$js  = "D:\projects\saibo\apps\pm\app\js"
-$dl  = "$env:TEMP\xterm-dl"
-
-$pkgs = @(
-  @{ url="https://registry.npmmirror.com/@xterm/xterm/-/xterm-5.5.0.tgz";
-     src="lib/xterm.js";       dst="xterm.js" },
-  @{ url="https://registry.npmmirror.com/@xterm/xterm/-/xterm-5.5.0.tgz";
-     src="css/xterm.css";      dst="xterm.css" },
-  @{ url="https://registry.npmmirror.com/@xterm/addon-fit/-/addon-fit-0.10.0.tgz";
-     src="lib/addon-fit.js";   dst="addon-fit.js" }
-)
-foreach ($p in $pkgs) {
-  $d = Join-Path $dl ([IO.Path]::GetFileNameWithoutExtension($p.dst))
-  New-Item -ItemType Directory $d -Force | Out-Null
-  $tgz = "$d.tgz"
-  if (!(Test-Path $tgz)) {
-    Invoke-WebRequest $p.url -OutFile $tgz -UseBasicParsing
-  }
-  tar.exe -xzf $tgz -C $d
-  Copy-Item "$d\package\$($p.src)" (Join-Path $js $p.dst) -Force
-}
-
-node D:\projects\saibo\apps\pm\app\scripts\inline_terminal.js
-```
-
-成功时 `terminal.html` 约 **305 KB**。
-
-**坑 3：不要用 `cat > file` 写远端文件**
+**坑 2：不要用 `cat > file` 写远端文件**
 
 Windows 默认 shell 是 PowerShell 5.1，**不认** `cat > path` 重定向。
 从 Linux 侧写文件请用 base64：
