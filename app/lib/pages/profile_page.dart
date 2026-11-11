@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../api/pm_api.dart';
 import '../session.dart';
+import '../theme/theme_controller.dart';
 import 'login_page.dart';
 
 /// 个人中心：展示账号信息、修改头像、修改密码
@@ -92,6 +93,65 @@ class _ProfilePageState extends State<ProfilePage> {
     if (result == true) {
       // 修改成功后强制重新登录，避免旧 token 语义不清
       setState(() {});
+    }
+  }
+
+  // ==================== 外观 ====================
+
+  Future<void> _chooseTheme() async {
+    final current = themeController.mode;
+    final picked = await showModalBottomSheet<ThemeMode>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Text(
+                '外观模式',
+                style: Theme.of(ctx).textTheme.titleMedium,
+              ),
+            ),
+            const Divider(height: 1),
+            RadioListTile<ThemeMode>(
+              value: ThemeMode.dark,
+              // ignore: deprecated_member_use
+              groupValue: current,
+              title: const Text('暗黑'),
+              subtitle: const Text('深色界面，适合夜间使用'),
+              secondary: const Icon(Icons.dark_mode_outlined),
+              // ignore: deprecated_member_use
+              onChanged: (v) => Navigator.pop(ctx, v),
+            ),
+            RadioListTile<ThemeMode>(
+              value: ThemeMode.light,
+              // ignore: deprecated_member_use
+              groupValue: current,
+              title: const Text('明亮'),
+              subtitle: const Text('浅色界面，适合白天使用'),
+              secondary: const Icon(Icons.light_mode_outlined),
+              // ignore: deprecated_member_use
+              onChanged: (v) => Navigator.pop(ctx, v),
+            ),
+            RadioListTile<ThemeMode>(
+              value: ThemeMode.system,
+              // ignore: deprecated_member_use
+              groupValue: current,
+              title: const Text('跟随系统'),
+              subtitle: const Text('由手机系统的深色模式决定'),
+              secondary: const Icon(Icons.brightness_auto_outlined),
+              // ignore: deprecated_member_use
+              onChanged: (v) => Navigator.pop(ctx, v),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (picked != null) {
+      await themeController.setMode(picked);
+      if (mounted) setState(() {});
     }
   }
 
@@ -229,6 +289,21 @@ class _ProfilePageState extends State<ProfilePage> {
                   title: const Text('修改头像'),
                   trailing: const Icon(Icons.chevron_right, size: 20),
                   onTap: _uploadingAvatar ? null : _changeAvatar,
+                ),
+                Divider(height: 1, color: cs.outlineVariant),
+                ListTile(
+                  leading: Icon(
+                    themeController.mode == ThemeMode.dark
+                        ? Icons.dark_mode_outlined
+                        : Icons.light_mode_outlined,
+                  ),
+                  title: const Text('外观模式'),
+                  subtitle: Text(
+                    themeController.modeLabel,
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  trailing: const Icon(Icons.chevron_right, size: 20),
+                  onTap: _chooseTheme,
                 ),
               ],
             ),
