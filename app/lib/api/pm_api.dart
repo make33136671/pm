@@ -328,6 +328,43 @@ class PmApi {
     }
   }
 
+  /// 把文件上传到 PM 通用存储（`/admin/Upload/Direct`），返回完整可访问 URL。
+  ///
+  /// 网页端终端「📎」按钮用的就是这条：shell 与 pm 进程权限域隔离，
+  /// 所以不传文件系统路径，而是上传后拿到 URL，再在终端里贴 curl 命令下载。
+  Future<Map<String, dynamic>> uploadDirect(
+    String filePath,
+    String fileName,
+  ) async {
+    final form = FormData.fromMap({
+      'file': await MultipartFile.fromFile(filePath, filename: fileName),
+    });
+    late Response<dynamic> resp;
+    try {
+      resp = await _dio.post(
+        '$baseUrl/admin/Upload/Direct',
+        data: form,
+        options: Options(
+          headers: {
+            if (_token != null) 'Authorization': 'Bearer $_token',
+          },
+          responseType: ResponseType.json,
+        ),
+      );
+    } on DioException catch (e) {
+      throw ApiException(_friendlyNetworkError(e));
+    }
+    final body = resp.data;
+    if (body is! Map) throw ApiException('上传响应格式异常');
+    final json = body.cast<String, dynamic>();
+    if ((json['code'] as int? ?? -1) != 0) {
+      throw ApiException(json['message'] as String? ?? '上传失败');
+    }
+    final d = json['data'];
+    if (d is! Map) throw ApiException('上传响应缺少 data');
+    return d.cast<String, dynamic>();
+  }
+
   /// 下载文件到本地临时路径，返回保存后的文件
   Future<File> downloadFile(String path, String savePath) async {
     try {

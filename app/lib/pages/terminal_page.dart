@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
 
+import '../api/pm_api.dart';
 import '../session.dart';
 
 /// 终端页：原生 xterm 渲染 + WebSocket 直连后端 PTY。
@@ -49,6 +51,10 @@ class _TerminalPageState extends State<TerminalPage> {
   final Terminal _terminal = Terminal(maxLines: 10000);
   final TerminalController _controller = TerminalController();
   final FocusNode _focusNode = FocusNode();
+
+  /// 底部命令输入框（与网页端一致：快捷操作栏与终端原生输入并存）
+  final TextEditingController _inputCtrl = TextEditingController();
+  bool _uploading = false;
 
   WebSocket? _ws;
   StreamSubscription<dynamic>? _sub;
@@ -94,6 +100,7 @@ class _TerminalPageState extends State<TerminalPage> {
     _ws?.close();
     _focusNode.dispose();
     _controller.dispose();
+    _inputCtrl.dispose();
     super.dispose();
   }
 
@@ -239,6 +246,90 @@ class _TerminalPageState extends State<TerminalPage> {
 
   // ======================= 交互动作 =======================
 
+  /// 发送一行命令：文本和回车**必须分两帧**发，中间留间隔。
+  ///
+  /// 合并成 `text\r` 单帧发出时，PTY 端的 TUI 程序（如 Claude Code、vim）
+  /// 会把整块识别成「粘贴」，`\r` 被当成粘贴内容里的换行而不是「提交」。
+  /// 分段发送后接收端才会把它当成独立的回车键。
+  void _sendLine(String text) {
+    _send(Uint8List.fromList(utf8.encode(text)));
+    Timer(const Duration(milliseconds: 100), () {
+      _send(Uint8List.fromList(utf8.encode('\r')));
+    });
+  }
+
+  void _sendEnter() {
+    _send(Uint8List.fromList(utf8.encode('\r')));
+  }
+
+  /// 方向键：标准 ANSI 转义序列
+  void _sendArrow(String dir) {
+    const seq = {
+      'up': '\x1b[A',
+      'down': '\x1b[B',
+      'right': '\x1b[C',
+      'left': '\x1b[D',
+    };
+    final s = seq[dir];
+    if (s != null) _send(Uint8List.fromList(utf8.encode(s)));
+  }
+
+  /// 底部命令输入框发送
+  void _sendFromInput() {
+    final text = _inputCtrl.text;
+    if (text.isEmpty) return;
+    _sendLine(text);
+    _inputCtrl.clear();
+  }
+
+  /// 上传文件：上传到 PM 通用存储后，把 curl 下载命令填进输入框。
+  ///
+  /// shell 与 pm 进程权限域隔离，不能直接给文件系统路径，
+  /// 所以走「上传拿 URL → 终端内 curl 拉取」这条与网页端一致的路径。
+  Future<void> _pickAndUpload() async {
+    if (_uploading) return;
+    FilePickerResult? picked;
+    try {
+      picked = await FilePicker.platform.pickFiles(withData: false);
+    } catch (e) {
+      _toast('无法打开文件选择器：$e');
+      return;
+    }
+    final path = picked?.files.singleOrNull?.path;
+    final name = picked?.files.singleOrNull?.name;
+    if (path == null || name == null) return;
+
+    setState(() => _uploading = true);
+    try {
+      final detail = await widget.session.api.uploadDirect(path, name);
+      final url = detail['absfileName'] as String? ?? '';
+      final realName = detail['name'] as String? ?? name;
+      if (url.isEmpty) throw ApiException('上传成功但未返回 URL');
+      // 文件名里的单引号要转义，避免拼出错误的 shell 命令
+      final safe = realName.replaceAll("'", "'\\''");
+      final cmd = "curl -fsSL '$url' -o '$safe'";
+      setState(() {
+        _inputCtrl.text = _inputCtrl.text.isEmpty
+            ? cmd
+            : '${_inputCtrl.text} $cmd';
+      });
+      _toast('已上传，curl 命令已填入输入框');
+    } on ApiException catch (e) {
+      _toast('上传失败：${e.message}');
+    } catch (e) {
+      _toast('上传失败：$e');
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  void _toast(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), duration: const Duration(seconds: 2)),
+    );
+  }
+
   void _reconnect() {
     setState(() {
       _error = null;
@@ -336,7 +427,171 @@ class _TerminalPageState extends State<TerminalPage> {
               ),
             ),
           ),
+          _buildShortcutBar(context),
         ],
+      ),
+    );
+  }
+
+  /// 底部快捷操作栏（对齐网页端终端的两行设计）
+  ///
+  /// 第一行：📎上传 + 命令输入框 + 发送
+  /// 第二行：方向键 / Tab / ok / 继续 / 换行 / 空格 / 回车
+  ///
+  /// 说明：这些按钮**不抢终端焦点**，点击后焦点仍留在输入框或终端，
+  /// 方便连续操作（与网页端 `@mousedown.prevent` 的意图一致）。
+  Widget _buildShortcutBar(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF252526),
+        border: const Border(top: BorderSide(color: Color(0xFF3C3C3C))),
+      ),
+      padding: EdgeInsets.only(
+        left: 8,
+        right: 8,
+        top: 6,
+        // 避开系统手势条
+        bottom: 6 + MediaQuery.of(context).padding.bottom,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ---- 第一行：上传 + 命令输入 ----
+          Row(
+            children: [
+              IconButton(
+                tooltip: '上传文件到终端',
+                onPressed: _uploading ? null : _pickAndUpload,
+                icon: _uploading
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.attach_file, size: 20),
+                visualDensity: VisualDensity.compact,
+                color: cs.onSurfaceVariant,
+              ),
+              Expanded(
+                child: SizedBox(
+                  height: 38,
+                  child: TextField(
+                    controller: _inputCtrl,
+                    style: const TextStyle(fontSize: 13),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      hintText: '输入命令，回车发送到终端',
+                      hintStyle: TextStyle(
+                        fontSize: 12,
+                        color: cs.onSurfaceVariant.withValues(alpha: 0.6),
+                      ),
+                      filled: true,
+                      fillColor: const Color(0xFF1E1E1E),
+                      contentPadding:
+                          const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide: BorderSide.none,
+                      ),
+                      suffixIcon: ListenableBuilder(
+                        listenable: _inputCtrl,
+                        builder: (_, __) => _inputCtrl.text.isEmpty
+                            ? const SizedBox.shrink()
+                            : IconButton(
+                                tooltip: '清空',
+                                icon: const Icon(Icons.clear, size: 16),
+                                visualDensity: VisualDensity.compact,
+                                onPressed: () => _inputCtrl.clear(),
+                              ),
+                      ),
+                    ),
+                    onSubmitted: (_) => _sendFromInput(),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              ListenableBuilder(
+                listenable: _inputCtrl,
+                builder: (_, __) => FilledButton(
+                  onPressed: _inputCtrl.text.isEmpty ? null : _sendFromInput,
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(56, 38),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  child: const Text('发送', style: TextStyle(fontSize: 13)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          // ---- 第二行：快捷按键 ----
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _key(context, '↑', () => _sendArrow('up')),
+                _key(context, '↓', () => _sendArrow('down')),
+                _key(context, '←', () => _sendArrow('left')),
+                _key(context, '→', () => _sendArrow('right')),
+                _key(context, 'Tab', () => _sendTextRaw('\t')),
+                _key(context, 'ok', () => _sendLine('ok')),
+                _key(context, '继续', () => _sendLine('继续')),
+                _key(context, '换行', () => _sendTextRaw('\n')),
+                _key(context, '空格', () => _sendTextRaw(' ')),
+                _key(
+                  context,
+                  '⏎ 回车',
+                  _sendEnter,
+                  primary: true,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 发送原始字符串（不追加回车）
+  void _sendTextRaw(String s) {
+    _send(Uint8List.fromList(utf8.encode(s)));
+  }
+
+  /// 快捷按键：紧凑样式，横向排列
+  Widget _key(
+    BuildContext context,
+    String label,
+    VoidCallback onTap, {
+    bool primary = false,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: SizedBox(
+        height: 34,
+        child: primary
+            ? FilledButton(
+                onPressed: onTap,
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  visualDensity: VisualDensity.compact,
+                  textStyle: const TextStyle(fontSize: 13),
+                ),
+                child: Text(label),
+              )
+            : OutlinedButton(
+                onPressed: onTap,
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  visualDensity: VisualDensity.compact,
+                  textStyle: const TextStyle(fontSize: 13),
+                  side: BorderSide(color: cs.outlineVariant),
+                  foregroundColor: cs.onSurface,
+                ),
+                child: Text(label),
+              ),
       ),
     );
   }
