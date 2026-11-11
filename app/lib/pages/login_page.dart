@@ -6,7 +6,7 @@ import 'home_page.dart';
 
 /// 登录页：服务器地址 + 账号 + 密码
 ///
-/// 首次使用要填服务器地址（例如 192.168.2.110:8080），之后会记住；
+/// 首次使用要填服务器地址（例如 192.168.2.110:8088），之后会记住；
 /// 退出登录后地址仍保留，改一下输入框即可连到别的服务器。
 class LoginPage extends StatefulWidget {
   final Session session;
@@ -49,7 +49,7 @@ class _LoginPageState extends State<LoginPage> {
     if (s.isEmpty) return '请输入服务器地址';
     final uri = Uri.tryParse(Session.normalizeUrl(s));
     if (uri == null || uri.host.isEmpty) {
-      return '地址格式不正确，示例：192.168.2.110:8080';
+      return '地址格式不正确，示例：192.168.2.110:8088';
     }
     return null;
   }
@@ -163,7 +163,7 @@ class _LoginPageState extends State<LoginPage> {
                       },
                       decoration: InputDecoration(
                         labelText: '服务器地址',
-                        hintText: '192.168.2.110:8080',
+                        hintText: '192.168.2.110:8088',
                         prefixIcon: const Icon(Icons.dns_outlined),
                         helperText: '不填协议默认 http，可带端口',
                         suffixIcon: Row(
@@ -333,8 +333,9 @@ class _LoginPageState extends State<LoginPage> {
 }
 
 /// 常用服务器地址（内网为主），点一下即可填入输入框
+///
+/// ⚠️ 端口是 **8088**（Caddy 入口），不是 8080 —— 8080 是 GitLab 的端口。
 const _kQuickHosts = <String>[
-  '192.168.2.110:8080',
-  '192.168.10.199:8080',
+  '192.168.2.110:8088',
   'pm.saibo.club',
 ];

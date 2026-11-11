@@ -1,7 +1,6 @@
 // 验证终端页底部快捷操作栏与网页端对齐
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pm_mobile/api/pm_api.dart';
 import 'package:pm_mobile/pages/terminal_page.dart';
 import 'package:pm_mobile/session.dart';
 

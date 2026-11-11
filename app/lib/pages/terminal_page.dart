@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' show FontFeature;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -47,6 +48,16 @@ class _TerminalPageState extends State<TerminalPage> {
   static const _maxBackoff = Duration(seconds: 10);
   static const _codeSuperseded = 4001;
 
+  /// 快捷栏按键间距
+  static const _keyGap = 6.0;
+
+  /// 终端区固定深色配色 —— 不跟随 App 主题。
+  /// App 主题是浅色，若用 Theme.of(context).colorScheme 里的
+  /// onSurface（黑色）压在这块深色底上，就会出现黑底黑字。
+  static const _barBg = Color(0xFF252526);
+  static const _barFg = Color(0xFFE6E6E6);
+  static const _barHint = Color(0xFF8A8A8A);
+
   /// 10000 行滚动缓冲：够翻历史，又不至于吃太多内存
   final Terminal _terminal = Terminal(maxLines: 10000);
   final TerminalController _controller = TerminalController();
@@ -64,6 +75,15 @@ class _TerminalPageState extends State<TerminalPage> {
   int _retries = 0;
   Timer? _reconnectTimer;
   Timer? _pingTimer;
+
+  /// 本轮已发但未收到 pong 的 ping 时间戳；0 = 无在途 ping
+  int _pendingPingAt = 0;
+
+  /// 最近一次测得的 RTT（毫秒）；-1 = 未知
+  int _latencyMs = -1;
+
+  /// RTT 超过该阈值判为「延迟高」，与网页端 HIGH_LATENCY_MS 保持一致
+  static const _highLatencyMs = 300;
   bool _disposed = false;
 
   /// 被别处顶替后不再重连，避免两个设备互相踢
@@ -85,10 +105,9 @@ class _TerminalPageState extends State<TerminalPage> {
 
     _connect();
 
-    // 首帧后请求焦点，让软键盘可直接使用
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _focusNode.requestFocus();
-    });
+    // 注意：**不自动弹软键盘**。
+    // 手机软键盘一弹出会占掉大半屏，把终端和底部快捷栏都挤没；
+    // 用户点终端或输入框时再聚焦即可。
   }
 
   @override
@@ -147,11 +166,22 @@ class _TerminalPageState extends State<TerminalPage> {
 
       if (mounted) setState(() => _ready = true);
 
-      // 应用层心跳：部分反向代理会掐掉长时间无数据的连接
-      _pingTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-        _sendText(
-          '{"type":"ping","t":${DateTime.now().millisecondsSinceEpoch}}',
-        );
+      // 心跳 + 延迟测量（与网页端一致）：
+      // 每秒发一次 ping，后端原样回 pong，据此算 RTT。
+      // 同时这些流量也防止反向代理掐掉长时间空闲的连接。
+      _pendingPingAt = 0;
+      _pingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (_ws?.readyState != WebSocket.open) return;
+        // 上个 ping 还没回 → 链路卡顿，直接按已等待时长显示
+        if (_pendingPingAt != 0) {
+          final waited = DateTime.now().millisecondsSinceEpoch - _pendingPingAt;
+          if (mounted && _latencyMs != waited) {
+            setState(() => _latencyMs = waited);
+          }
+          return;
+        }
+        _pendingPingAt = DateTime.now().millisecondsSinceEpoch;
+        _sendText('{"type":"ping","t":$_pendingPingAt}');
       });
     } catch (e) {
       _onDisconnected('无法连接终端：$e');
@@ -165,8 +195,25 @@ class _TerminalPageState extends State<TerminalPage> {
       // Text 帧：pong / exit 等控制消息
       try {
         final m = jsonDecode(data);
-        if (m is Map && m['type'] == 'exit') {
-          _terminal.write('\r\n\x1b[33m[进程已退出，code=${m['code']}]\x1b[0m\r\n');
+        if (m is Map) {
+          if (m['type'] == 'exit') {
+            _terminal.write('\r\n\x1b[33m[进程已退出，code=${m['code']}]\x1b[0m\r\n');
+            return;
+          }
+          if (m['type'] == 'pong') {
+            // 后端原样回传 t，据此算 RTT
+            final t = (m['t'] is num)
+                ? (m['t'] as num).toInt()
+                : _pendingPingAt;
+            if (t != 0) {
+              final rtt = DateTime.now().millisecondsSinceEpoch - t;
+              _pendingPingAt = 0;
+              if (mounted && rtt != _latencyMs) {
+                setState(() => _latencyMs = rtt);
+              }
+            }
+            return;
+          }
         }
       } catch (_) {
         // 不是 JSON，当普通文本输出
@@ -335,6 +382,7 @@ class _TerminalPageState extends State<TerminalPage> {
       _error = null;
       _retries = 0;
       _superseded = false;
+      _latencyMs = -1;
     });
     _connect();
   }
@@ -360,14 +408,86 @@ class _TerminalPageState extends State<TerminalPage> {
     );
   }
 
+  /// 网络质量指示灯 + 延时数值
+  ///
+  /// 状态与网页端对照：
+  ///   · 连接中    灰点「连接中…」
+  ///   · 正常      绿点「12ms」
+  ///   · 延迟高    黄点「450ms」（RTT > 300ms）
+  ///   · 已断开    红点「已断开」
+  Widget _buildLatencyChip(BuildContext context) {
+    late final Color color;
+    late final String text;
+
+    if (!_ready) {
+      if (_error != null) {
+        color = const Color(0xFFE5484D);
+        text = '已断开';
+      } else {
+        color = const Color(0xFF8A8A8A);
+        text = '连接中';
+      }
+    } else if (_latencyMs < 0) {
+      color = const Color(0xFF8A8A8A);
+      text = '--';
+    } else if (_latencyMs > _highLatencyMs) {
+      color = const Color(0xFFF0A020);
+      text = '${_latencyMs}ms';
+    } else {
+      color = const Color(0xFF2FBF71);
+      text = '${_latencyMs}ms';
+    }
+
+    // 注意：不要在外面套 Center —— AppBar.actions 的 Row 里 Center 会撑满
+    // 剩余宽度，把后面的按钮挤跑，自身内容也可能被压成 0 宽。
+    // 用 Padding + Container(Row min) 自然包裹即可。
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(3),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 实心小圆点为指示灯
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 5),
+            Text(
+              text,
+              style: TextStyle(
+                fontSize: 12,
+                height: 1,
+                color: color,
+                fontWeight: FontWeight.w600,
+                // 数字等宽，避免跳动
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
       backgroundColor: const Color(0xFF1E1E1E),
+      // 键盘弹出时收缩 body（而非覆盖），让快捷栏始终贴在键盘上方可见
+      resizeToAvoidBottomInset: true,
       appBar: AppBar(
         title: Text('终端 #${widget.sessionId}'),
         actions: [
+          // 网络质量指示灯 + 延时数值（放在三个操作按钮左侧）
+          _buildLatencyChip(context),
           IconButton(
             tooltip: '重连',
             icon: const Icon(Icons.refresh),
@@ -420,7 +540,8 @@ class _TerminalPageState extends State<TerminalPage> {
                 _terminal,
                 controller: _controller,
                 focusNode: _focusNode,
-                autofocus: true,
+                // 不自动弹键盘：进页面就让软键盘占满屏会看不见终端
+                autofocus: false,
                 // 手机屏窄，字号固定，保证列数合理
                 textStyle: const TerminalStyle(fontSize: 13, height: 1.25),
                 backgroundOpacity: 1,
@@ -441,11 +562,10 @@ class _TerminalPageState extends State<TerminalPage> {
   /// 说明：这些按钮**不抢终端焦点**，点击后焦点仍留在输入框或终端，
   /// 方便连续操作（与网页端 `@mousedown.prevent` 的意图一致）。
   Widget _buildShortcutBar(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF252526),
-        border: const Border(top: BorderSide(color: Color(0xFF3C3C3C))),
+      decoration: const BoxDecoration(
+        color: _barBg,
+        border: Border(top: BorderSide(color: Color(0xFF3C3C3C))),
       ),
       padding: EdgeInsets.only(
         left: 8,
@@ -467,31 +587,34 @@ class _TerminalPageState extends State<TerminalPage> {
                     ? const SizedBox(
                         width: 18,
                         height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: _barFg),
                       )
                     : const Icon(Icons.attach_file, size: 20),
                 visualDensity: VisualDensity.compact,
-                color: cs.onSurfaceVariant,
+                color: _barFg,
               ),
               Expanded(
                 child: SizedBox(
                   height: 38,
                   child: TextField(
                     controller: _inputCtrl,
-                    style: const TextStyle(fontSize: 13),
+                    style: const TextStyle(fontSize: 13, color: _barFg),
+                    // 终端区是深色，光标与选中色也固定浅色
+                    cursorColor: _barFg,
                     decoration: InputDecoration(
                       isDense: true,
                       hintText: '输入命令，回车发送到终端',
-                      hintStyle: TextStyle(
+                      hintStyle: const TextStyle(
                         fontSize: 12,
-                        color: cs.onSurfaceVariant.withValues(alpha: 0.6),
+                        color: _barHint,
                       ),
                       filled: true,
                       fillColor: const Color(0xFF1E1E1E),
                       contentPadding:
                           const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                       border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(6),
+                        borderRadius: BorderRadius.circular(3),
                         borderSide: BorderSide.none,
                       ),
                       suffixIcon: ListenableBuilder(
@@ -500,7 +623,8 @@ class _TerminalPageState extends State<TerminalPage> {
                             ? const SizedBox.shrink()
                             : IconButton(
                                 tooltip: '清空',
-                                icon: const Icon(Icons.clear, size: 16),
+                                icon: const Icon(Icons.clear,
+                                    size: 16, color: _barHint),
                                 visualDensity: VisualDensity.compact,
                                 onPressed: () => _inputCtrl.clear(),
                               ),
@@ -527,27 +651,37 @@ class _TerminalPageState extends State<TerminalPage> {
           ),
           const SizedBox(height: 6),
           // ---- 第二行：快捷按键 ----
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                _key(context, '↑', () => _sendArrow('up')),
-                _key(context, '↓', () => _sendArrow('down')),
-                _key(context, '←', () => _sendArrow('left')),
-                _key(context, '→', () => _sendArrow('right')),
-                _key(context, 'Tab', () => _sendTextRaw('\t')),
-                _key(context, 'ok', () => _sendLine('ok')),
-                _key(context, '继续', () => _sendLine('继续')),
-                _key(context, '换行', () => _sendTextRaw('\n')),
-                _key(context, '空格', () => _sendTextRaw(' ')),
-                _key(
-                  context,
-                  '⏎ 回车',
-                  _sendEnter,
-                  primary: true,
-                ),
-              ],
-            ),
+          // 用 Wrap 自动换行，按屏幕宽度铺满；不再横向滚动溢出
+          LayoutBuilder(
+            builder: (ctx, constraints) {
+              // 每行最多放 5 个，窄屏自动变 4 个，保证点击区域够大
+              final perRow = constraints.maxWidth < 340 ? 4 : 5;
+              final itemW = (constraints.maxWidth -
+                      (perRow - 1) * _keyGap) /
+                  perRow;
+              return Wrap(
+                spacing: _keyGap,
+                runSpacing: _keyGap,
+                children: [
+                  _key(context, '↑', () => _sendArrow('up'), width: itemW),
+                  _key(context, '↓', () => _sendArrow('down'), width: itemW),
+                  _key(context, '←', () => _sendArrow('left'), width: itemW),
+                  _key(context, '→', () => _sendArrow('right'), width: itemW),
+                  _key(context, 'Tab', () => _sendTextRaw('\t'), width: itemW),
+                  _key(context, 'ok', () => _sendLine('ok'), width: itemW),
+                  _key(context, '继续', () => _sendLine('继续'), width: itemW),
+                  _key(context, '换行', () => _sendTextRaw('\n'), width: itemW),
+                  _key(context, '空格', () => _sendTextRaw(' '), width: itemW),
+                  _key(
+                    context,
+                    '⏎ 回车',
+                    _sendEnter,
+                    width: itemW,
+                    primary: true,
+                  ),
+                ],
+              );
+            },
           ),
         ],
       ),
@@ -559,40 +693,68 @@ class _TerminalPageState extends State<TerminalPage> {
     _send(Uint8List.fromList(utf8.encode(s)));
   }
 
-  /// 快捷按键：紧凑样式，横向排列
+  /// 快捷按键：等宽铺满一行，深色底 + 浅色字（终端区域统一深色）
+  ///
+  /// 注意：这里**不能用** Theme 的 onSurface —— 浅色主题下它是黑色，
+  /// 压在深色快捷栏上会看不见。终端区配色独立于 App 主题。
   Widget _key(
     BuildContext context,
     String label,
     VoidCallback onTap, {
+    required double width,
     bool primary = false,
   }) {
-    final cs = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(right: 6),
-      child: SizedBox(
-        height: 34,
-        child: primary
-            ? FilledButton(
-                onPressed: onTap,
-                style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  visualDensity: VisualDensity.compact,
-                  textStyle: const TextStyle(fontSize: 13),
+    const fg = Color(0xFFE6E6E6);
+    const bg = Color(0xFF31313A);
+    const border = Color(0xFF4A4A55);
+    return SizedBox(
+      width: width,
+      height: 40,
+      child: primary
+          ? FilledButton(
+              onPressed: onTap,
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF4A78D0),
+                foregroundColor: Colors.white,
+                padding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+                textStyle: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
                 ),
-                child: Text(label),
-              )
-            : OutlinedButton(
-                onPressed: onTap,
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  visualDensity: VisualDensity.compact,
-                  textStyle: const TextStyle(fontSize: 13),
-                  side: BorderSide(color: cs.outlineVariant),
-                  foregroundColor: cs.onSurface,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(3),
                 ),
-                child: Text(label),
               ),
-      ),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Text(label, maxLines: 1),
+                ),
+              ),
+            )
+          : OutlinedButton(
+              onPressed: onTap,
+              style: OutlinedButton.styleFrom(
+                backgroundColor: bg,
+                foregroundColor: fg,
+                padding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+                textStyle: const TextStyle(fontSize: 13),
+                side: const BorderSide(color: border),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(3),
+                ),
+              ),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Text(label, maxLines: 1),
+                ),
+              ),
+            ),
     );
   }
 }
