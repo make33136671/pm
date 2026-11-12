@@ -118,7 +118,7 @@ class Session extends ChangeNotifier {
 
   /// 规范化用户输入的服务器地址：
   ///   192.168.10.199        → http://192.168.10.199
-  ///   192.168.10.199:8088   → http://192.168.10.199:8088
+  ///   192.168.10.199:8080   → http://192.168.10.199:8080
   ///   http://x.com/         → http://x.com   （去尾部斜杠）
   static String normalizeUrl(String input) {
     var s = input.trim();

@@ -24,7 +24,7 @@ void main() {
     expect(find.widgetWithText(TextFormField, '账号'), findsOneWidget);
     expect(find.widgetWithText(TextFormField, '密码'), findsOneWidget);
     // 3. 快捷地址 chip
-    expect(find.widgetWithText(ActionChip, '192.168.2.110:8080'), findsOneWidget);
+    expect(find.widgetWithText(ActionChip, '192.168.2.110:8088'), findsOneWidget);
     // 4. 测试连接按钮
     expect(find.byTooltip('测试连接'), findsOneWidget);
     // 5. 登录按钮

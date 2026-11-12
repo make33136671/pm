@@ -22,7 +22,7 @@ class ApiException implements Exception {
 ///   · 鉴权用 JwtAdmin scheme：Authorization: Bearer <token>
 ///   · 管理端接口都在 /admin/* 前缀下
 class PmApi {
-  /// 服务地址，形如 http://192.168.10.199:8080（不带尾部斜杠）
+  /// 服务地址，形如 http://192.168.2.110:8088（不带尾部斜杠）
   String baseUrl;
 
   String? _token;

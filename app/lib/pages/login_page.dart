@@ -334,8 +334,11 @@ class _LoginPageState extends State<LoginPage> {
 
 /// 常用服务器地址（内网为主），点一下即可填入输入框
 ///
-/// ⚠️ 端口是 **8088**（Caddy 入口），不是 8080 —— 8080 是 GitLab 的端口。
+/// 两台机器的端口不同，别混淆：
+///   · 110：走 Caddy 入口 → **8088**（110 的 8080 是 GitLab，会跳 GitLab 登录页）
+///   · 199：PM 直连 → **8080**
 const _kQuickHosts = <String>[
   '192.168.2.110:8088',
+  '192.168.10.199:8080',
   'pm.saibo.club',
 ];
